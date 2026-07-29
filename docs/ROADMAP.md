@@ -52,12 +52,19 @@ of Android code exists.
 - [x] Verified against `hound` (dev-dependency only) on synthetic files and on
       the whole archive: 277 files, 177 790 491 frames, zero mismatches
 - [x] CLI: `loopslcr info <file>`
-- [ ] RIFF writer: bit depth selectable, chunk-aware
+- [x] `analysis::tail` — tail length via −60 dBFS threshold, plus workflow
+      detection (path A / path B / already trimmed / unclear)
+- [x] RIFF writer: 16/24/32-bit int and 32-bit float, `acid` + `smpl` +
+      `LIST`/`INFO` written, honest RIFF size, tags after `data` so readers
+      that assume audio at byte 44 still work
+- [x] Verified in both directions: `hound` reads what we write, and a
+      decode → encode round trip at the source depth is byte-identical
+- [x] End-to-end on the real reference file: 8-bar region cut from the Caustic
+      export and written back, 822 058 frames, sample-for-sample unchanged
 - [ ] `ops::cut` — apply `Grid::region` to an `AudioBuffer`
 - [ ] `ops::foldback` — `out[i % loopLen] += tail[i]`, multi-wrap safe
 - [ ] `ops::fade` — micro-fades, configurable length
 - [ ] `analysis::peaks` — min/max buckets for waveform display
-- [ ] `analysis::tail` — tail length via −60 dBFS threshold
 - [ ] `analysis::detect_workflow` — path A vs path B suggestion
 - [ ] CLI: `loopslcr cut <file> [flags]`
 - [ ] **`--dry-run`** — print cut points, residual error in µs/ppm, tail length; write nothing
@@ -79,11 +86,12 @@ see `tests/archive_sweep.rs`, gated behind `LOOPSLCR_ARCHIVE`.
 - [ ] `Taper` — semitone law + speed law, both directions
 - [ ] Drive modes: pitch-driven, BPM-driven, snap-to-sample-exact
 - [ ] `--pitch <st|cents>` / `--target-bpm <n>` / `--snap`
-- [ ] Bit depth selection: 16 / 24 / 32f
-- [ ] TPDF dither (noise shaping optional, later)
-- [ ] `acid` chunk writer — tempo, beats, root note, loop flag
-- [ ] `smpl` chunk writer — loop points, unity note, fine tune
-- [ ] `LIST/INFO` → `ICMT` plain-text tag
+- [x] Bit depth selection: 16 / 24 / 32 / 32f (`BitDepth`, default 24)
+- [ ] TPDF dither (noise shaping optional, later) — only place quantisation
+      still rounds bare
+- [x] `acid` chunk writer — tempo, beats, meter, loop flag
+- [x] `smpl` chunk writer — loop points (spec-inclusive `end`), unity note
+- [x] `LIST/INFO` → `ICMT` plain-text tag
 - [ ] Filename template `{name}_{bpm}bpm_{bars}bars.wav`
 - [ ] Peak check + overshoot warning (no auto-normalize)
 - [ ] `--normalize` as an explicit opt-in

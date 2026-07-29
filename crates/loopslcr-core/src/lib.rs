@@ -31,4 +31,4 @@ pub use analysis::{Tail, Workflow, WorkflowGuess};
 pub use buffer::AudioBuffer;
 pub use error::{Error, Result};
 pub use rational::Rational;
-pub use wav::Wav;
+pub use wav::{BitDepth, Wav, WriteSpec};

@@ -30,4 +30,13 @@ pub enum Error {
 
     #[error("unsupported bit depth {0}: expected 16, 24 or 32-bit int, or 32/64-bit float")]
     UnsupportedBitDepth(u16),
+
+    #[error("invalid bit depth {0:?}: expected 16, 24, 32 or 32f")]
+    BitDepthName(String),
+
+    #[error("{0} channels is more than a WAVE header can declare")]
+    TooManyChannels(usize),
+
+    #[error("output would be {0} bytes: past the 4 GiB a RIFF file can address")]
+    FileTooLarge(u64),
 }

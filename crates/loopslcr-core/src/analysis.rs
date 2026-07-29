@@ -59,6 +59,9 @@ pub enum Workflow {
     /// About one loop plus a tail: the tail has to be folded back onto the
     /// head to get the settled state. `skip = 0`.
     TailFoldback,
+    /// Exactly the requested length with no tail at all — the file has already
+    /// been through this. Nothing to cut, and nothing to fold back.
+    AlreadyTrimmed,
     /// Neither shape fits — the caller has to decide.
     Unclear,
 }
@@ -117,7 +120,12 @@ impl WorkflowGuess {
         // 16 but the decay stays above -60 dBFS until bar 17.57 -- 2.20 loop
         // lengths for an 8-bar loop. A narrow window would call that unclear
         // purely because the reverb was long.
-        let workflow = if (1.75..=2.6).contains(&audible_loops) {
+        // A file that is exactly one loop long with no decay left is one this
+        // tool already produced. Folding back an empty tail would be harmless
+        // but saying so would be misleading.
+        let workflow = if audible_frames >= frames && (loops_in_file - 1.0).abs() < 0.001 {
+            Workflow::AlreadyTrimmed
+        } else if (1.75..=2.6).contains(&audible_loops) {
             Workflow::WarmupRender
         } else if (0.85..=1.5).contains(&audible_loops) {
             Workflow::TailFoldback
@@ -133,7 +141,7 @@ impl WorkflowGuess {
             loop_bars,
             skip_bars: match workflow {
                 Workflow::WarmupRender => loop_bars,
-                Workflow::TailFoldback => 0,
+                Workflow::TailFoldback | Workflow::AlreadyTrimmed => 0,
                 // Default to the safe path: a straight cut can be listened to
                 // and redone, a wrong foldback quietly doubles the tails.
                 Workflow::Unclear => loop_bars,
@@ -269,14 +277,35 @@ mod tests {
     fn the_same_duration_can_be_either_job() {
         let g = grid_103();
         let bar = g.samples_per_bar().to_f64();
-        let frames = (8.0 * bar) as usize;
-        // Eight audible bars: two 4-bar loops, or one 8-bar loop.
+        // Eight audible bars plus a one-bar tail: two 4-bar loops rendered for
+        // warmup, or one 8-bar loop wanting foldback.
+        let (total, audible) = ((9.0 * bar) as usize, (8.0 * bar) as usize);
         assert_eq!(
-            WorkflowGuess::detect(&g, frames, frames, 4).workflow,
+            WorkflowGuess::detect(&g, total, audible, 4).workflow,
             Workflow::WarmupRender
         );
         assert_eq!(
-            WorkflowGuess::detect(&g, frames, frames, 8).workflow,
+            WorkflowGuess::detect(&g, total, audible, 8).workflow,
+            Workflow::TailFoldback
+        );
+    }
+
+    /// Feeding a finished loop back in must not propose more work on it.
+    #[test]
+    fn a_file_this_tool_already_cut_is_recognised() {
+        let g = grid_103();
+        // What the writer produced from the reference file: exactly 8 bars,
+        // no decay past the end.
+        let frames = g.exact_sample(8).round_half_up() as usize;
+        assert_eq!(frames, 822_058);
+        let guess = WorkflowGuess::detect(&g, frames, frames, 8);
+        assert_eq!(guess.workflow, Workflow::AlreadyTrimmed);
+        assert_eq!(guess.skip_bars, 0);
+
+        // One bar of tail and it is a foldback candidate again.
+        let with_tail = frames + g.samples_per_bar().round_half_up() as usize;
+        assert_eq!(
+            WorkflowGuess::detect(&g, with_tail, frames, 8).workflow,
             Workflow::TailFoldback
         );
     }

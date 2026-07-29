@@ -488,10 +488,11 @@ Ohne geteilten State sind es zwei Apps in einer APK statt einem Werkzeug.
 1. **Micro-Fades:** default an (0.5 ms) oder default aus?
 2. **Peak-Buckets:** in Rust berechnen und über JNI reichen, oder in Kotlin?
     (Rust = konsistent mit CLI-`info`, Kotlin = weniger JNI-Verkehr)
-3. **WAV-Read:** `hound` behalten oder auch selbst → null Dependency?
-    ⚠️ **blockiert den nächsten Schritt.** Der Writer muss wegen `acid`/`smpl`
-    ohnehin selbst gebaut werden — Lesen dazu kostet vielleicht 200 Zeilen und
-    macht die Dependency ganz überflüssig.
+3. ~~**WAV-Read:** `hound` behalten oder auch selbst?~~ → **selbst, entschieden
+    und gebaut.** Reader und Writer teilen die Chunk-Ebene, `hound` bleibt als
+    *dev*-dependency für die Gegenprobe in beide Richtungen. Null Runtime-Deps.
+    Hat sich sofort bezahlt: das zu kurze RIFF-Size-Feld der Caustic-Exports
+    fiel nur auf, weil das Parsen in eigener Hand lag.
 4. **Wow/Flutter-Defaults** und ob Charakter-Settings presetbar sind
 5. **iOS** — lohnt sich das, oder decken CLI + Android den echten Workflow ab?
 
@@ -572,11 +573,17 @@ Ein Sweep mit `loopslcr info` über alle 279 Einträge (Details siehe
   Bar-Zahl. **Die 4-Bar-Loops dominieren**, nicht die 8-Bar-Loops — der
   Default `--bars 8` passt zum Referenzfall, aber nicht zur Mehrheit des
   Archivs.
-- **`smpl`-Loop-Endpunkt ist mehrdeutig.** Die Spec sagt inklusiv, aber
-  `58.5 DL_4BAR_Lumiko Imai 01.wav` hat 787 199 Frames und `end = 787199` —
-  inklusiv gelesen zeigte der Loop ein Frame über das Dateiende hinaus. Der
-  Encoder meint hier exklusiv. Beim Schreiben des `smpl`-Chunks entscheiden,
-  beim Lesen nicht blind vertrauen.
+- **`smpl`-Loop-Endpunkt ist mehrdeutig** — ✅ **entschieden.** Die Spec sagt
+  inklusiv, aber `58.5 DL_4BAR_Lumiko Imai 01.wav` hat 787 199 Frames und
+  `end = 787199` — inklusiv gelesen zeigte der Loop ein Frame über das
+  Dateiende hinaus. Der Encoder meint hier exklusiv.
+  **Geschrieben wird die Spec** (`end = start + len - 1`), weil das die
+  Konvention ist, die Sampler erwarten. **Gelesen wird tolerant:**
+  `SampleLoop::frame_count()` liest inklusiv, nimmt aber ein `end`, das genau
+  auf die Frame-Anzahl fällt, als exklusiv — der Off-by-one ist dann der des
+  Encoders, und in die andere Richtung geraten hieße ein Klick im Loop-Punkt.
+  Das rohe `end`-Feld bleibt unverändert lesbar; nur die Längenfrage ist
+  entschieden.
 
 ### Was beim Bauen auffiel
 

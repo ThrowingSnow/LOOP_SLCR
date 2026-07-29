@@ -221,6 +221,36 @@ impl AcidChunk {
     pub fn is_one_shot(&self) -> bool {
         self.flags & Self::FLAG_ONE_SHOT != 0
     }
+
+    /// The tag for a finished loop: stretchable, tempo and length declared.
+    ///
+    /// `beats` is in the meter's own beats, not in the BPM unit — an 8-bar 7/8
+    /// loop is 56 beats even when the tempo was given per quarter note.
+    pub fn for_loop(tempo: f32, beats: u32, numerator: u16, denominator: u16) -> Self {
+        AcidChunk {
+            flags: Self::FLAG_STRETCH,
+            root_note: 0,
+            beats,
+            meter_numerator: numerator,
+            meter_denominator: denominator,
+            tempo,
+        }
+    }
+
+    /// The 24-byte body, in the layout [`AcidChunk::parse`] reads.
+    pub fn to_body(self) -> Vec<u8> {
+        let mut v = Vec::with_capacity(24);
+        v.extend_from_slice(&self.flags.to_le_bytes());
+        v.extend_from_slice(&self.root_note.to_le_bytes());
+        // The two fields at 6..12 that no documentation agrees on. Written as
+        // zero: every reader that has an opinion about them tolerates that.
+        v.extend_from_slice(&[0u8; 6]);
+        v.extend_from_slice(&self.beats.to_le_bytes());
+        v.extend_from_slice(&self.meter_denominator.to_le_bytes());
+        v.extend_from_slice(&self.meter_numerator.to_le_bytes());
+        v.extend_from_slice(&self.tempo.to_le_bytes());
+        v
+    }
 }
 
 /// One loop region from the `smpl` chunk.
@@ -228,8 +258,42 @@ impl AcidChunk {
 pub struct SampleLoop {
     pub start: u32,
     /// Inclusive last frame, per the RIFF spec — not a half-open end.
+    ///
+    /// Not every encoder agrees: `58.5 DL_4BAR_Lumiko Imai 01.wav` in the
+    /// archive has 787199 frames and `end = 787199`, which read inclusively
+    /// would put the loop one frame past the file. So a value read from a file
+    /// is a hint, not a length — use [`SampleLoop::frame_count`], which
+    /// tolerates both conventions. What LOOP_SLCR *writes* is the spec:
+    /// `end = start + len - 1`.
     pub end: u32,
     pub play_count: u32,
+}
+
+impl SampleLoop {
+    /// A loop over the whole of a `frames`-long file, written per the spec.
+    pub fn whole_file(frames: u32) -> Self {
+        SampleLoop {
+            start: 0,
+            // A zero-length file has no last frame to point at; `end = 0` is
+            // the only value that is not a wraparound.
+            end: frames.saturating_sub(1),
+            play_count: 0, // 0 means "forever"
+        }
+    }
+
+    /// Loop length in frames, clamped to a file of `total_frames`.
+    ///
+    /// Reads `end` inclusively, but an `end` that lands exactly on the file
+    /// length is taken as an exclusive end rather than reported as a loop
+    /// running past the data — the off-by-one is the encoder's, and guessing
+    /// the other way would produce a click at the loop point.
+    pub fn frame_count(&self, total_frames: u32) -> u32 {
+        if self.end >= total_frames {
+            total_frames.saturating_sub(self.start)
+        } else {
+            (self.end + 1).saturating_sub(self.start)
+        }
+    }
 }
 
 /// The `smpl` chunk — loop points and tuning.
@@ -268,6 +332,45 @@ impl SmplChunk {
             loops,
         })
     }
+
+    /// One loop over the whole file, untuned at middle C.
+    pub fn whole_file(frames: u32) -> Self {
+        SmplChunk {
+            midi_unity_note: 60,
+            midi_pitch_fraction: 0,
+            loops: vec![SampleLoop::whole_file(frames)],
+        }
+    }
+
+    /// The body, in the layout [`SmplChunk::parse`] reads.
+    ///
+    /// `sample_rate` is needed for the sample-period field, which the struct
+    /// does not carry: it is a restatement of what `fmt ` already says, and
+    /// deriving it here keeps the two from disagreeing.
+    pub fn to_body(&self, sample_rate: u32) -> Vec<u8> {
+        let mut v = Vec::with_capacity(36 + self.loops.len() * 24);
+        v.extend_from_slice(&0u32.to_le_bytes()); // manufacturer
+        v.extend_from_slice(&0u32.to_le_bytes()); // product
+        // Sample period in nanoseconds. Integer division truncates — 44100 Hz
+        // is 22675.7 ns — but every sampler recomputes this from the sample
+        // rate anyway; the field is informational.
+        v.extend_from_slice(&(1_000_000_000u32 / sample_rate.max(1)).to_le_bytes());
+        v.extend_from_slice(&self.midi_unity_note.to_le_bytes());
+        v.extend_from_slice(&self.midi_pitch_fraction.to_le_bytes());
+        v.extend_from_slice(&0u32.to_le_bytes()); // SMPTE format: none
+        v.extend_from_slice(&0u32.to_le_bytes()); // SMPTE offset
+        v.extend_from_slice(&(self.loops.len() as u32).to_le_bytes());
+        v.extend_from_slice(&0u32.to_le_bytes()); // no trailing sampler data
+        for (i, l) in self.loops.iter().enumerate() {
+            v.extend_from_slice(&(i as u32).to_le_bytes()); // identifier
+            v.extend_from_slice(&0u32.to_le_bytes()); // type: forward
+            v.extend_from_slice(&l.start.to_le_bytes());
+            v.extend_from_slice(&l.end.to_le_bytes());
+            v.extend_from_slice(&0u32.to_le_bytes()); // fraction
+            v.extend_from_slice(&l.play_count.to_le_bytes());
+        }
+        v
+    }
 }
 
 /// Reads `LIST`/`INFO` sub-chunks into `(id, text)` pairs.
@@ -291,6 +394,25 @@ pub fn parse_info_list(body: &[u8]) -> Vec<(ChunkId, String)> {
         rest = rest.get(advance..).unwrap_or(&[]);
     }
     out
+}
+
+/// Builds a `LIST`/`INFO` body from `(id, text)` pairs.
+///
+/// Each entry is NUL-terminated: `INFO` strings are C strings, and readers
+/// that copy them into fixed buffers rely on the terminator being there.
+pub fn build_info_list(entries: &[(ChunkId, String)]) -> Vec<u8> {
+    let mut body = Vec::from(INFO);
+    for (id, text) in entries {
+        let mut bytes = text.as_bytes().to_vec();
+        bytes.push(0);
+        body.extend_from_slice(id);
+        body.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        body.extend_from_slice(&bytes);
+        if bytes.len() % 2 == 1 {
+            body.push(0); // word alignment
+        }
+    }
+    body
 }
 
 fn read_id(b: &[u8], at: usize) -> ChunkId {
@@ -503,6 +625,55 @@ mod tests {
         assert_eq!(smpl.loops.len(), 1);
         assert_eq!(smpl.loops[0].start, 0);
         assert_eq!(smpl.loops[0].end, 822_057);
+    }
+
+    #[test]
+    fn a_loop_body_round_trips() {
+        let smpl = SmplChunk::whole_file(822_058);
+        let parsed = SmplChunk::parse(&smpl.to_body(44_100)).unwrap();
+        assert_eq!(parsed, smpl);
+        // Written per the spec: the last frame, not one past it.
+        assert_eq!(parsed.loops[0].end, 822_057);
+        assert_eq!(parsed.loops[0].frame_count(822_058), 822_058);
+    }
+
+    #[test]
+    fn an_acid_body_round_trips() {
+        let acid = AcidChunk::for_loop(103.0, 32, 4, 4);
+        let body = acid.to_body();
+        assert_eq!(body.len(), 24);
+        assert_eq!(AcidChunk::parse(&body), Some(acid));
+    }
+
+    #[test]
+    fn loop_length_survives_both_end_point_conventions() {
+        // Spec-conformant: end is the last frame.
+        let inclusive = SampleLoop { start: 0, end: 99, play_count: 0 };
+        assert_eq!(inclusive.frame_count(100), 100);
+
+        // What `58.5 DL_4BAR_Lumiko Imai 01.wav` does: end equals the frame
+        // count, so it can only have meant an exclusive end. Reading it
+        // inclusively would loop one frame past the data — a click.
+        let exclusive = SampleLoop { start: 0, end: 787_199, play_count: 0 };
+        assert_eq!(exclusive.frame_count(787_199), 787_199);
+
+        // Nonsense stays clamped rather than wrapping.
+        let past = SampleLoop { start: 50, end: 999_999, play_count: 0 };
+        assert_eq!(past.frame_count(100), 50);
+        let inverted = SampleLoop { start: 80, end: 20, play_count: 0 };
+        assert_eq!(inverted.frame_count(100), 0);
+
+        // An empty file has no frame to point at.
+        assert_eq!(SampleLoop::whole_file(0).end, 0);
+    }
+
+    #[test]
+    fn an_info_list_round_trips() {
+        let entries = vec![
+            (ICMT, "103 BPM, 8 bars".to_string()), // odd length, forces a pad
+            (*b"INAM", "loop".to_string()),
+        ];
+        assert_eq!(parse_info_list(&build_info_list(&entries)), entries);
     }
 
     #[test]

@@ -292,12 +292,14 @@ fn render_info(
 
             if let Some(buf) = &decoded {
                 let tail = Tail::measure_default(buf);
+                // `audible_end` is one past the last audible frame; the report
+                // names the frame itself.
                 writeln!(
                     s,
                     "    above -60dB  {:.4} bars, last at frame {} ({})",
                     tail.audible_end as f64 / spb,
-                    tail.audible_end,
-                    timecode(tail.audible_end as u64, format.sample_rate)
+                    tail.audible_end.saturating_sub(1),
+                    timecode(tail.audible_end.saturating_sub(1) as u64, format.sample_rate)
                 )?;
                 writeln!(
                     s,
@@ -324,6 +326,10 @@ fn render_info(
                     Workflow::TailFoldback => writeln!(
                         s,
                         "    path B — one loop plus tail. Skip 0 bars, keep {loop_bars}, fold the tail back."
+                    )?,
+                    Workflow::AlreadyTrimmed => writeln!(
+                        s,
+                        "    already trimmed — exactly {loop_bars} bars, no tail. Nothing to do."
                     )?,
                     Workflow::Unclear => writeln!(
                         s,

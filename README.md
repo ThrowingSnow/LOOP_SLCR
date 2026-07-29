@@ -1,7 +1,9 @@
 # LOOP_SLCR
 
-> **Status: M1 in progress.** The exact timing core is built and tested; audio
-> I/O is next. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is done.
+> **Status: M1 in progress.** The exact timing core and WAV I/O are built and
+> tested — reading verified against `hound` on 277 real files, writing verified
+> in both directions. Next are the `ops` and `loopslcr cut` itself.
+> See [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is done.
 
 A precision loop-trimming tool. Feed it a rendered drum loop with a warmup head and
 an FX tail; it returns a **sample-exact, seamless N-bar loop**, optionally transposed
