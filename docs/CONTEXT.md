@@ -1,11 +1,13 @@
-# LOOPCUT — Kontextfile (Session-Übergabe)
+# LOOP_SLCR — Kontextfile (Session-Übergabe)
 
 > **Zweck:** Diese Datei in einen neuen Chat ziehen → Claude Van Damme ist sofort auf Stand.
-> **Status:** REPO ANGELEGT (`LOOP_SLICR`) — `docs/BRAINSTORMING.md`,
-> `docs/ROADMAP.md`, `docs/ARCHITECTURE.md` liegen im Repo.
-> Nächster Schritt: Cargo-Workspace scaffolden (`*-core` + `*-cli`), beginnend mit
-> `rational.rs` + `timing/grid.rs` und Golden-Value-Tests für den 103-BPM-Fall.
-> **Letztes Update:** Session 1, Update 7 — 29.07.2026
+> **Status:** TIMING-CORE STEHT. Cargo-Workspace angelegt, `rational.rs` +
+> `timing/{signature,tempo,grid}.rs` implementiert, 28 Unit-Tests + Doctest
+> grün, Clippy sauber. Der 103-BPM-Referenzfall reproduziert die Docs exakt
+> (in 822058 = 0:18.641, out 1644116 = 0:37.282).
+> Nächster Schritt: RIFF-Reader → `AudioBuffer` → `ops::cut`, danach ist
+> `--dry-run` über das Archiv real (279 Files, Pfad in §7 bestätigt).
+> **Letztes Update:** Session 2 — 29.07.2026
 
 ---
 
@@ -16,7 +18,7 @@ sauberen N-Bar-Loop schneidet** (Warmup-Bars weg, FX-Tail weg), optional per
 **Tape-Varispeed** transponiert und die resultierende BPM im Output deklariert.
 Dazu ein **BPM-/Zeit-Rechner** im Stil von `toolstud.io/music/bpm.php`.
 
-Arbeitstitel: **LOOPCUT** (Name offen — Vorschläge in §9)
+Name: **LOOP_SLCR** (entschieden — §9). Crates `loopslcr-*`, Binary `loopslcr`.
 
 ---
 
@@ -346,8 +348,8 @@ Termux-Constraint entfällt damit komplett.
 
 | Stufe | Inhalt | Nutzen |
 |---|---|---|
-| **v0.1** | `loopcut-core` (lib) + `loopcut-cli` (bin), reines Rust, kein Android | Läuft am selben Abend. Batch über bestehendes `AUDIO/DRUMLOOPS/`-Archiv (279+ Files) → sofortiger Nutzen ohne eine Zeile Android-Code |
-| **v1.0** | `loopcut-jni` (cdylib) + Kotlin/Compose UI, `cargo-ndk` | Core schon auf echten Files validiert → APK ist nur noch UI-Arbeit |
+| **v0.1** | `loopslcr-core` (lib) + `loopslcr-cli` (bin), reines Rust, kein Android | Läuft am selben Abend. Batch über bestehendes `AUDIO/DRUMLOOPS/`-Archiv (279+ Files) → sofortiger Nutzen ohne eine Zeile Android-Code |
+| **v1.0** | `loopslcr-jni` (cdylib) + Kotlin/Compose UI, `cargo-ndk` | Core schon auf echten Files validiert → APK ist nur noch UI-Arbeit |
 
 **JNI-Oberfläche bewusst winzig — zwei Funktionen:**
 - `analyze(path)` → Header, SR, Kanäle, Dauer, Peak-Buckets für Waveform
@@ -366,11 +368,11 @@ ist → Kotlin-only ist die schnellere Linie.
 ### Cargo-Workspace-Layout
 
 ```
-loopcut/
+loopslcr/
 ├── crates/
-│   ├── loopcut-core/     # lib: WAV-IO, Rational-Mathe, Cut, Foldback
-│   ├── loopcut-cli/      # bin: clap-CLI  ← v0.1
-│   └── loopcut-jni/      # cdylib: 2 Funktionen  ← v1.0
+│   ├── loopslcr-core/     # lib: WAV-IO, Rational-Mathe, Cut, Foldback
+│   ├── loopslcr-cli/      # bin: clap-CLI  ← v0.1
+│   └── loopslcr-jni/      # cdylib: 2 Funktionen  ← v1.0
 ├── android/              # Kotlin + Compose, cargo-ndk
 └── Cargo.toml
 ```
@@ -390,10 +392,10 @@ loopcut/
 ### CLI-Oberfläche v0.1
 
 ```
-loopcut info  in.wav
-loopcut cut   in.wav --bpm 103 --bars 8 --skip 8 --tail discard -o out.wav
-loopcut cut   in.wav --bpm 103 --bars 8 --skip 0 --tail fold    -o out.wav
-loopcut batch ./drumloops --bpm-from-name --bars 8 -o ./cut/
+loopslcr info  in.wav
+loopslcr cut   in.wav --bpm 103 --bars 8 --skip 8 --tail discard -o out.wav
+loopslcr cut   in.wav --bpm 103 --bars 8 --skip 0 --tail fold    -o out.wav
+loopslcr batch ./drumloops --bpm-from-name --bars 8 -o ./cut/
 ```
 
 Flags: `--sig 7/8` · `--bpm-unit 1/4` · `--align loop|grid` · `--fade 1ms`
@@ -478,22 +480,28 @@ Ohne geteilten State sind es zwei Apps in einer APK statt einem Werkzeug.
 12. ~~Sättigung~~ → **v1.1**, nach Release (Oversampling + ADAA, Port aus OktoTakt)
 13. ~~Grid vs. Loop~~ → **sichtbarer Toggle**
 14. ~~Docs~~ → generiert, siehe `docs/`
+15. ~~Name~~ → **LOOP_SLCR**, Crates `loopslcr-*`, Binary `loopslcr`
 
 ### Noch offen ❓
-6. **Name?** — auf später vertagt (§9)
-7. **Micro-Fades:** default an (0.5 ms) oder default aus?
-8. **Peak-Buckets:** in Rust berechnen und über JNI reichen, oder in Kotlin?
+1. **Micro-Fades:** default an (0.5 ms) oder default aus?
+2. **Peak-Buckets:** in Rust berechnen und über JNI reichen, oder in Kotlin?
     (Rust = konsistent mit CLI-`info`, Kotlin = weniger JNI-Verkehr)
-9. **WAV-Read:** `hound` behalten oder auch selbst → null Dependency?
-10. **Wow/Flutter-Defaults** und ob Charakter-Settings presetbar sind
-11. **iOS** — lohnt sich das, oder decken CLI + Android den echten Workflow ab?
-~~WAV-Read alt~~ `hound` behalten oder auch selbst → null Dependency?
+3. **WAV-Read:** `hound` behalten oder auch selbst → null Dependency?
+    ⚠️ **blockiert den nächsten Schritt.** Der Writer muss wegen `acid`/`smpl`
+    ohnehin selbst gebaut werden — Lesen dazu kostet vielleicht 200 Zeilen und
+    macht die Dependency ganz überflüssig.
+4. **Wow/Flutter-Defaults** und ob Charakter-Settings presetbar sind
+5. **iOS** — lohnt sich das, oder decken CLI + Android den echten Workflow ab?
 
-## 9. Namensvorschläge
+## 9. Name — entschieden
+
+**LOOP_SLCR.** Crates `loopslcr-core` / `loopslcr-cli` / `loopslcr-jni`,
+Binary `loopslcr` — kleingeschrieben, wie Cargo es erwartet.
+
+Die Kandidaten, gegen die entschieden wurde:
 
 | Name | Kommentar |
 |---|---|
-| **LOOP_SLICR** | aktueller Repo-Name, vorläufig |
 | **TAKTSCHNITT** | Deutsch, passt zur HexaTakt/OktoTakt-Familie |
 | **LOOPKLIPP** | kurz, DE/EN-Hybrid |
 | **BARCUT** | international, langweilig-solide |
@@ -510,9 +518,9 @@ Ohne geteilten State sind es zwei Apps in einer APK statt einem Werkzeug.
 | **HexaTakt** | 16-Track JUCE Groovebox, VST3 + Standalone | existiert, Modul-Donor |
 | **OktoTakt** | 8-Voice Rytm-style Drum Machine, JUCE | Architektur + Roadmap fertig |
 | **DRUMOID** | simple Android Drum-App | Brainstorming, Stack offen |
-| **LOOPCUT** | ← dieses Projekt, Utility statt Instrument | Brainstorming |
+| **LOOP_SLCR** | ← dieses Projekt, Utility statt Instrument | Timing-Core steht, M1 läuft |
 
-LOOPCUT ist bewusst das **kleinste** Projekt der Familie — ein Tool, kein Instrument.
+LOOP_SLCR ist bewusst das **kleinste** Projekt der Familie — ein Tool, kein Instrument.
 Guter Kandidat, um endlich mal etwas **fertig** zu veröffentlichen.
 
 ---
@@ -520,11 +528,34 @@ Guter Kandidat, um endlich mal etwas **fertig** zu veröffentlichen.
 ## 11. Nächster Schritt
 
 1. ✅ Docs generiert: `BRAINSTORMING.md`, `ROADMAP.md`, `ARCHITECTURE.md`
-2. ✅ GitHub-Repo angelegt (`LOOP_SLICR`), Docs unter `docs/` eingecheckt
-3. Namen festlegen (blockiert nichts; Repo heisst vorläufig `LOOP_SLICR`,
-   in den Docs steht noch der Arbeitstitel LOOPCUT)
-4. Cargo-Workspace scaffolden
-4. `rational.rs` + `timing/grid.rs` zuerst — mit Golden-Value-Tests für den
-   103-BPM-Referenzfall, bevor irgendein Audio angefasst wird
-5. Dann WAV-IO, dann `ops::cut`
-6. `--dry-run` über das `AUDIO/DRUMLOOPS/`-Archiv → Annahmen validieren (M1-Exit)
+2. ✅ GitHub-Repo angelegt (`LOOP_SLCR`), Docs unter `docs/` eingecheckt
+3. ✅ Name festgelegt: **LOOP_SLCR**, Crates `loopslcr-*`, Binary `loopslcr`
+4. ✅ Cargo-Workspace scaffoldet, Rust 1.97.1 via rustup
+5. ✅ `rational.rs` + `timing/` mit Golden-Value-Tests — 28 Tests grün,
+   bevor irgendein Audio angefasst wurde
+6. ✅ CLI `loopslcr grid` — der audiofreie Teil von `--dry-run`
+7. **Offen: WAV-Read entscheiden** (§8 Punkt 3) — blockiert den nächsten Schritt
+8. Dann RIFF-Reader → `AudioBuffer` → `ops::cut` → `ops::foldback`
+9. `--dry-run` über das Archiv → Annahmen validieren (M1-Exit)
+
+### Was beim Bauen auffiel
+
+- **Der Archivpfad ist bestätigt:** `IT'S_ME!/ALL STUFF OF ME/AUDIO/DRUMLOOPS/`
+  enthält **exakt 279** WAVs.
+- **`--bpm-from-name` braucht mehr als `^(\d{2,3})\b`.** Im Archiv liegen
+  `102-MTRX-01.wav` (kein Wortende nach der Zahl, `\b` greift nicht wie gedacht),
+  `105CSTC-APRL02-…` und `00005 136BPM E01…`. Für M1 kein Blocker, für v0.4 notiert.
+- **§3c Restfehler-Angabe präzisiert:** beim 103-BPM-Fall ist das Residual exakt
+  **−26/103 Samples ≈ −5.724 µs ≈ −0.307 ppm**. Die Doku sagte „0.25 Samples
+  ≈ 5.7 µs ≈ 0.3 ppm" — richtig gerundet, aber das Vorzeichen fehlte
+  (es wird abgerundet) und der exakte Bruch ist 26/103, nicht 1/4.
+- **6/8 mit BPM-Einheit 1/4 ist bar-identisch mit 3/4** (beides 3 Viertel pro
+  Bar). Erst `--bpm-unit 3/8` macht daraus 2 punktierte Viertel — und der Bar
+  wird dabei **kürzer**, Faktor 2/3, nicht länger. Steht als Test drin.
+- **Overflow panict auch im Release**, nicht nur in Debug wie in ARCHITECTURE
+  §3.1 vorgesehen: gegen `i128` kosten die Checks nichts messbar, ein stiller
+  Wrap würde dagegen einen Cut-Punkt unbemerkt verfälschen.
+- **`#![deny(clippy::float_arithmetic)]`** auf dem Core macht Invariante 2
+  („Floats nur in der Sample-Domäne") build-geprüft. Genau drei Ausnahmen,
+  alle einzeln begründet und reine Anzeige: `Rational::to_f64`,
+  `Residual::micros`, `Residual::ppm`.

@@ -1,8 +1,7 @@
 # LOOP_SLCR — Roadmap
 
 > Name fixed: **LOOP_SLCR**. Crates are `loopslcr-core` / `loopslcr-cli` /
-> `loopslcr-jni`, the binary is `loopslcr`. The working title LOOPCUT still
-> appears in the other docs.
+> `loopslcr-jni`, the binary is `loopslcr`.
 >
 > **Status:** M1 in progress — the timing core is done, audio I/O is next.
 > Last updated 29.07.2026.

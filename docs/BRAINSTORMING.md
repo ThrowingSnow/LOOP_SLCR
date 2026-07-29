@@ -1,8 +1,8 @@
-# LOOPCUT — Brainstorming
+# LOOP_SLCR — Brainstorming
 
-> Working title **LOOPCUT**, repository name **LOOP_SLICR**. Final name not yet
-> decided (see §9); `loopcut-*` crate names in the docs are placeholders.
-> Status: idea space consolidated, decisions locked, ready for implementation.
+> Name fixed: **LOOP_SLCR** (see §9), crates `loopslcr-*`, binary `loopslcr`.
+> Status: idea space consolidated, decisions locked, implementation started —
+> see [`ROADMAP.md`](ROADMAP.md).
 
 ---
 
@@ -322,19 +322,21 @@ optional. Order: normalize → dither → quantise, in that order and no other.
 
 ---
 
-## 9. Naming Candidates
+## 9. Naming — decided
+
+**LOOP_SLCR.** Crates `loopslcr-core` / `loopslcr-cli` / `loopslcr-jni`, binary
+`loopslcr` — lowercase, as Cargo expects.
+
+The candidates it was chosen over:
 
 | Name | Note |
 |---|---|
-| **LOOP_SLICR** | current repository name — working candidate |
 | **TAKTSCHNITT** | German, fits the HexaTakt / OktoTakt family |
 | **LOOPKLIPP** | short, DE/EN hybrid |
 | **TAILFOLD** | names the killer feature |
 | **BARCUT** | international, solid, unexciting |
 | **SCHNITTTAKT** | triple T, very German |
 | ~~CSTC-CUT~~ | too Caustic-specific, limits scope |
-
-Decision deferred.
 
 ---
 
@@ -345,11 +347,11 @@ Decision deferred.
 | **HexaTakt** | 16-track JUCE groovebox, VST3 + standalone | exists, module donor |
 | **OktoTakt** | 8-voice Rytm-style drum machine, JUCE | architecture + roadmap done |
 | **DRUMOID** | simple Android drum app | brainstorming |
-| **LOOPCUT** | ← this project — a tool, not an instrument | ready to build |
+| **LOOP_SLCR** | ← this project — a tool, not an instrument | timing core built, M1 in progress |
 
-LOOPCUT is deliberately the **smallest** project in the family. It has a
+LOOP_SLCR is deliberately the **smallest** project in the family. It has a
 finishable scope, an immediately useful CLI stage, and an existing archive of
-279+ loops to validate against on day one.
+279 loops to validate against on day one.
 
 ---
 

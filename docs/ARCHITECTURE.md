@@ -1,14 +1,14 @@
-# LOOPCUT — Architecture
+# LOOP_SLCR — Architecture
 
-> Working title **LOOPCUT**, repository **LOOP_SLICR**. The `loopcut-*` crate
-> names below are placeholders until the name is fixed.
+> Name fixed: **LOOP_SLCR**. The `loopslcr-*` crate names below are the real
+> ones; the binary is `loopslcr`.
 
 ---
 
 ## 1. Design Principles
 
 1. **The core knows nothing about UI.** No Android types, no `clap`, no JNI.
-   `loopcut-core` compiles and tests on any platform with zero platform code.
+   `loopslcr-core` compiles and tests on any platform with zero platform code.
 2. **Exact arithmetic in the timing domain.** All cut points derive from `i128`
    rationals. Floats appear only in the audio sample domain.
 3. **One number crosses the varispeed boundary.** The core sees `ratio: f64`.
@@ -25,12 +25,12 @@
 ## 2. Repository Layout
 
 ```
-loopcut/
+loopslcr/
 ├── Cargo.toml                    # workspace
 ├── crates/
-│   ├── loopcut-core/             # the entire brain — no platform deps
-│   ├── loopcut-cli/              # clap binary          ← v0.1
-│   └── loopcut-jni/              # cdylib for Android   ← v1.0
+│   ├── loopslcr-core/             # the entire brain — no platform deps
+│   ├── loopslcr-cli/              # clap binary          ← v0.1
+│   └── loopslcr-jni/              # cdylib for Android   ← v1.0
 ├── android/
 │   ├── app/                      # Kotlin + Compose
 │   └── build.gradle.kts          # cargo-ndk wiring
@@ -43,10 +43,10 @@ loopcut/
     └── release.yml               # signed APK on tag push
 ```
 
-### `loopcut-core` module tree
+### `loopslcr-core` module tree
 
 ```
-loopcut-core/src/
+loopslcr-core/src/
 ├── lib.rs                 # public API surface
 ├── rational.rs            # exact i128 rational arithmetic
 ├── timing/
@@ -373,7 +373,7 @@ previewDestroy(handle: i64)
 
 The CLI is single-threaded per file; `batch` uses `rayon` across files.
 
-`loopcut-core` never spawns threads itself. Concurrency is a front-end concern.
+`loopslcr-core` never spawns threads itself. Concurrency is a front-end concern.
 
 ---
 
@@ -417,13 +417,13 @@ instead of one tool.
 | `clap` (derive) | CLI | standard |
 | `serde` + `serde_json` | JNI parameter transport | one struct, versionable |
 | `rayon` | batch parallelism | v0.4 only |
-| `jni` | Android bridge | `loopcut-jni` only |
+| `jni` | Android bridge | `loopslcr-jni` only |
 | `thiserror` | error types | small |
 
 **Deliberately absent:** `symphonia` (decoder zoo for formats not needed),
 `hound` (cannot write `acid`/`smpl` chunks — own RIFF writer instead).
 
-`loopcut-core` has **no** platform dependencies and compiles for any target.
+`loopslcr-core` has **no** platform dependencies and compiles for any target.
 
 ---
 
@@ -451,5 +451,5 @@ These must hold at all times and are enforced by tests:
    varispeed path.
 3. With character enabled, output **length** is identical to the bypassed path.
 4. The preview audio thread performs no allocation, takes no lock, and cannot panic.
-5. `loopcut-core` contains no `cfg(target_os)` and no UI-facing types.
+5. `loopslcr-core` contains no `cfg(target_os)` and no UI-facing types.
 6. Foldback never silently alters gain — overshoot is reported, never fixed.

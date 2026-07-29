@@ -1,7 +1,7 @@
-# LOOP_SLICR
+# LOOP_SLCR
 
-> Working title in the design docs: **LOOPCUT**. Final name not yet decided.
-> **Status: design phase — no code yet.** The docs below are the current source of truth.
+> **Status: M1 in progress.** The exact timing core is built and tested; audio
+> I/O is next. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is done.
 
 A precision loop-trimming tool. Feed it a rendered drum loop with a warmup head and
 an FX tail; it returns a **sample-exact, seamless N-bar loop**, optionally transposed
@@ -120,34 +120,34 @@ No multi-track, no mixer, no FX rendering, no codec zoo. Minimal means minimal.
 
 ---
 
-## Planned layout
+## Layout
 
 ```
 ├── crates/
-│   ├── *-core/       # WAV I/O, exact rational math, cut, foldback — no platform deps
-│   ├── *-cli/        # clap binary                                  ← v0.1
-│   └── *-jni/        # cdylib for Android                           ← v1.0
-├── android/          # Kotlin + Compose, cargo-ndk
+│   ├── loopslcr-core/   # exact rational math, WAV I/O, cut, foldback — no platform deps
+│   ├── loopslcr-cli/    # clap binary `loopslcr`                        ← v0.1
+│   └── loopslcr-jni/    # cdylib for Android                            ← v1.0
+├── android/             # Kotlin + Compose, cargo-ndk                   ← v1.0
 └── docs/
 ```
 
 Stack: **Rust core, staged.** v0.1 is a pure CLI that is useful on the desktop before
 a single line of Android code exists — validated with `--dry-run` against an existing
-archive of 279+ loops. v1.0 adds a deliberately narrow JNI surface and a Compose UI.
+archive of 279 loops. v1.0 adds a deliberately narrow JNI surface and a Compose UI.
 
 ---
 
 ## Roadmap at a glance
 
-| Milestone | Content |
-|---|---|
-| M1 | v0.1 core + CLI, exact cut math, dry-run over the archive |
-| M2 | v0.2 varispeed, bit depth, dither, BPM tagging |
-| M3 | v0.3 tape character with loop-periodic modulation |
-| M4 | v0.4 batch processing, CLI feature-complete |
-| M5 | v1.0 Android APK, two tabs, tape-riding preview |
-| M6 | v1.1 saturation (oversampling + ADAA) |
-| M7 | v2.0 slice export, Elektron export, desktop GUI |
+| Milestone | Content | |
+|---|---|---|
+| M1 | v0.1 core + CLI, exact cut math, dry-run over the archive | **in progress** |
+| M2 | v0.2 varispeed, bit depth, dither, BPM tagging | |
+| M3 | v0.3 tape character with loop-periodic modulation | |
+| M4 | v0.4 batch processing, CLI feature-complete | |
+| M5 | v1.0 Android APK, two tabs, tape-riding preview | |
+| M6 | v1.1 saturation (oversampling + ADAA) | |
+| M7 | v2.0 slice export, Elektron export, desktop GUI | |
 
 Full detail in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -166,11 +166,11 @@ Full detail in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Open questions
 
-- Project name
 - Micro-fades: default on (0.5 ms) or default off?
 - Peak buckets: computed in Rust and passed over JNI, or computed in Kotlin?
 - WAV reading: use `hound`, or hand-rolled for zero dependency? (Writing must be
-  hand-rolled — `hound` cannot write `acid`/`smpl` chunks)
+  hand-rolled — `hound` cannot write `acid`/`smpl` chunks.) **Blocks the next
+  task.**
 - Wow/flutter default depths, and whether character settings are presetable
 - iOS: worth it, or do CLI + Android cover the real workflow?
 
@@ -183,7 +183,7 @@ Full detail in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 | **HexaTakt** | 16-track JUCE groovebox, VST3 + standalone |
 | **OktoTakt** | 8-voice Rytm-style drum machine, JUCE |
 | **DRUMOID** | simple Android drum app |
-| **LOOP_SLICR** | ← this project — a tool, not an instrument |
+| **LOOP_SLCR** | ← this project — a tool, not an instrument |
 
 Deliberately the **smallest** project in the family: finishable scope, an immediately
 useful CLI stage, and a real archive to validate against on day one.
