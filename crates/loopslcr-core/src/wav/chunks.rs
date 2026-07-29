@@ -50,18 +50,23 @@ impl<'a> Chunks<'a> {
             return Err(Error::NotWave);
         }
 
-        // The declared size covers everything after the size field itself.
-        // Trust the file length where the header overstates it: truncated
-        // downloads and some phone exports do this, and the data chunk is
-        // usually still complete enough to use.
-        let declared = read_u32(bytes, 4) as usize;
-        let end = declared
-            .checked_add(8)
-            .unwrap_or(bytes.len())
-            .min(bytes.len());
-        Ok(Chunks {
-            rest: &bytes[12..end.max(12)],
-        })
+        // The RIFF size field is advisory only. Encoders get it wrong in both
+        // directions: truncated downloads overstate it, and Caustic exports
+        // understate it by the 44 bytes of a classic WAVE header, which would
+        // cost real audio at the end of every file if it were believed. The
+        // actual file length is the authority; individual chunks are clamped
+        // to what remains as they are walked.
+        Ok(Chunks { rest: &bytes[12..] })
+    }
+
+    /// How far the RIFF size field is from the real file length, in bytes.
+    /// Positive means the header claims more than the file holds.
+    ///
+    /// Diagnostic only — nothing depends on it. Worth surfacing in `info`
+    /// because a mismatch says something about which tool wrote the file.
+    pub fn size_field_error(bytes: &[u8]) -> Option<i64> {
+        (bytes.len() >= 8 && read_id(bytes, 0) == RIFF)
+            .then(|| read_u32(bytes, 4) as i64 + 8 - bytes.len() as i64)
     }
 }
 
@@ -376,6 +381,37 @@ mod tests {
         assert_eq!(chunks[1].id, DATA);
         assert_eq!(chunks[1].body.len(), 40); // what actually survived
         assert!(chunks[1].body.iter().all(|&b| b == 7));
+    }
+
+    #[test]
+    fn a_riff_size_field_that_understates_the_file_costs_no_audio() {
+        // Caustic writes the RIFF size 44 bytes short — the length of a
+        // classic WAVE header. Believing it truncated the data chunk and left
+        // it ending mid-frame, losing audio from the end of every export.
+        let mut bytes = riff(&[(FMT, fmt_pcm(2, 44_100, 24)), (DATA, vec![7; 600])]);
+        let honest = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        bytes[4..8].copy_from_slice(&(honest - 44).to_le_bytes());
+
+        let chunks: Vec<Chunk> = Chunks::parse(&bytes).unwrap().collect();
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[1].id, DATA);
+        assert_eq!(chunks[1].body.len(), 600, "data chunk was truncated");
+        assert_eq!(chunks[1].body.len() % 6, 0, "left ending mid-frame");
+
+        assert_eq!(Chunks::size_field_error(&bytes), Some(-44));
+    }
+
+    #[test]
+    fn size_field_error_reports_both_directions() {
+        let bytes = riff(&[(DATA, vec![0; 8])]);
+        assert_eq!(Chunks::size_field_error(&bytes), Some(0));
+
+        let mut over = bytes.clone();
+        let honest = u32::from_le_bytes([over[4], over[5], over[6], over[7]]);
+        over[4..8].copy_from_slice(&(honest + 100).to_le_bytes());
+        assert_eq!(Chunks::size_field_error(&over), Some(100));
+
+        assert_eq!(Chunks::size_field_error(b"nope"), None);
     }
 
     #[test]

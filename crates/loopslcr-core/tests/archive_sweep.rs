@@ -84,6 +84,18 @@ fn every_file_parses_and_matches_hound() {
             ));
             continue;
         }
+        // Frame counts first. Comparing only the samples both readers agree
+        // exist would hide the very bug this sweep is meant to catch: a
+        // reader that silently stops short still matches on every frame it
+        // did read.
+        if wav.frames() as u32 != theirs.duration() {
+            failures.push(format!(
+                "{name}: frame count differs — ours {}, hound {}",
+                wav.frames(),
+                theirs.duration()
+            ));
+            continue;
+        }
 
         let channels = wav.channel_count();
         let mut mismatches = 0usize;

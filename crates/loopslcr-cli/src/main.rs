@@ -8,7 +8,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use loopslcr_core::timing::{Align, BpmUnit, Grid, Tempo, TimeSignature};
-use loopslcr_core::wav::{SampleFormat, Wav};
+use loopslcr_core::analysis::{Tail, Workflow, WorkflowGuess};
+use loopslcr_core::wav::{chunks::Chunks, SampleFormat, Wav};
 
 #[derive(Parser)]
 #[command(name = "loopslcr", version, about = "Sample-exact loop trimming")]
@@ -37,7 +38,11 @@ enum Command {
         #[arg(long = "bpm-unit", default_value = "1/4")]
         bpm_unit: BpmUnit,
 
-        /// Skip the peak scan — the only part that decodes samples.
+        /// Loop length to measure the file against, in bars.
+        #[arg(long, default_value_t = 8)]
+        bars: u64,
+
+        /// Skip decoding: no peak, no tail measurement, no workflow guess.
         #[arg(long)]
         no_peak: bool,
     },
@@ -130,12 +135,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             bpm,
             sig,
             bpm_unit,
+            bars,
             no_peak,
         } => {
             let bytes = std::fs::read(&file)
                 .map_err(|e| format!("{}: {e}", file.display()))?;
             let wav = Wav::parse(&bytes).map_err(|e| format!("{}: {e}", file.display()))?;
-            render_info(&file, bytes.len(), &wav, bpm, sig, bpm_unit, !no_peak)?
+            let size_error = Chunks::size_field_error(&bytes).unwrap_or(0);
+            render_info(&file, bytes.len(), size_error, &wav, bpm, sig, bpm_unit, bars, !no_peak)?
         }
         Command::Grid {
             bpm,
@@ -160,14 +167,17 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_info(
     path: &Path,
     file_size: usize,
+    size_field_error: i64,
     wav: &Wav,
     bpm: Option<Tempo>,
     sig: TimeSignature,
     bpm_unit: BpmUnit,
-    want_peak: bool,
+    loop_bars: u64,
+    decode: bool,
 ) -> Result<String, Box<dyn Error>> {
     let mut s = String::new();
     let format = wav.format();
@@ -195,6 +205,16 @@ fn render_info(
     if wav.has_partial_frame() {
         writeln!(s, "  ! data chunk ends mid-frame — trailing bytes ignored")?;
     }
+    if size_field_error != 0 {
+        // Advisory field, ignored when walking chunks — but it says something
+        // about which tool wrote the file, so it is worth showing.
+        writeln!(
+            s,
+            "  ! RIFF size field is {} bytes {} the real file — ignored",
+            size_field_error.abs(),
+            if size_field_error > 0 { "beyond" } else { "short of" }
+        )?;
+    }
     if !format.block_align_is_consistent() {
         writeln!(
             s,
@@ -204,8 +224,10 @@ fn render_info(
         )?;
     }
 
-    if want_peak {
-        let peak = wav.decode()?.peak();
+    // One decode serves the peak and the tail measurement.
+    let decoded = if decode { Some(wav.decode()?) } else { None };
+    if let Some(buf) = &decoded {
+        let peak = buf.peak();
         writeln!(s, "  peak         {peak:.6}  {}", dbfs(peak))?;
     }
 
@@ -263,10 +285,69 @@ fn render_info(
             writeln!(s, "  at {tempo}, {sig} ({source}):")?;
             writeln!(
                 s,
-                "    bar length {:.6} s = {spb:.4} samples",
+                "    bar length   {:.6} s = {spb:.4} samples",
                 grid.seconds_per_bar().to_f64()
             )?;
-            writeln!(s, "    file is {:.4} bars long", wav.frames() as f64 / spb)?;
+            writeln!(s, "    file spans   {:.4} bars", wav.frames() as f64 / spb)?;
+
+            if let Some(buf) = &decoded {
+                let tail = Tail::measure_default(buf);
+                writeln!(
+                    s,
+                    "    above -60dB  {:.4} bars, last at frame {} ({})",
+                    tail.audible_end as f64 / spb,
+                    tail.audible_end,
+                    timecode(tail.audible_end as u64, format.sample_rate)
+                )?;
+                writeln!(
+                    s,
+                    "    silent end   {:.4} bars = {} frames below {} dBFS",
+                    tail.trailing_frames as f64 / spb,
+                    tail.trailing_frames,
+                    tail.threshold_dbfs
+                )?;
+
+                let guess = WorkflowGuess::detect(
+                    &grid,
+                    wav.frames(),
+                    tail.audible_end,
+                    loop_bars,
+                );
+                writeln!(s)?;
+                writeln!(s, "  for a {loop_bars}-bar loop:")?;
+                match guess.workflow {
+                    Workflow::WarmupRender => writeln!(
+                        s,
+                        "    path A — warmup render. Skip {} bars, keep {}, discard the tail.",
+                        guess.skip_bars, loop_bars
+                    )?,
+                    Workflow::TailFoldback => writeln!(
+                        s,
+                        "    path B — one loop plus tail. Skip 0 bars, keep {loop_bars}, fold the tail back."
+                    )?,
+                    Workflow::Unclear => writeln!(
+                        s,
+                        "    unclear — {:.3} loop lengths of audible material. Defaulting to a straight cut.",
+                        guess.audible_bars / loop_bars as f64
+                    )?,
+                }
+                let region = grid.region(guess.skip_bars, loop_bars, Align::Loop);
+                writeln!(
+                    s,
+                    "    cut          {} .. {}  ({} .. {})",
+                    region.start,
+                    region.end,
+                    timecode(region.start, format.sample_rate),
+                    timecode(region.end, format.sample_rate)
+                )?;
+                if region.end as usize > wav.frames() {
+                    writeln!(
+                        s,
+                        "    ! the region runs {} frames past the end of the file",
+                        region.end as usize - wav.frames()
+                    )?;
+                }
+            }
         }
         None => {
             writeln!(s)?;
