@@ -1,0 +1,11 @@
+[package]
+name = "loopslcr-core"
+description = "Exact loop-trimming core: rational bar math, WAV I/O, cut, foldback"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true

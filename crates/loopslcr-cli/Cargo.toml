@@ -1,0 +1,12 @@
+[package]
+name = "loopslcr-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "loopslcr"
+path = "src/main.rs"
+
+[dependencies]
+loopslcr-core.workspace = true
+clap.workspace = true
