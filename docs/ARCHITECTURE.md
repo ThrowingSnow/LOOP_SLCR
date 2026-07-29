@@ -60,6 +60,8 @@ loopslcr-core/src/
 │   ├── write.rs           # RIFF writer
 │   └── chunks.rs          # AcidChunk, SmplChunk, InfoChunk
 ├── buffer.rs              # AudioBuffer (planar f64)
+├── naming.rs              # tempo + bar count from a filename
+├── analysis.rs            # Tail, Workflow, guess_loop_bars
 ├── ops/
 │   ├── mod.rs
 │   ├── cut.rs

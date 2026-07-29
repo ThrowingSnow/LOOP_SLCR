@@ -23,6 +23,8 @@
 pub mod analysis;
 pub mod buffer;
 pub mod error;
+pub mod naming;
+pub mod ops;
 pub mod rational;
 pub mod timing;
 pub mod wav;
@@ -30,5 +32,6 @@ pub mod wav;
 pub use analysis::{Tail, Workflow, WorkflowGuess};
 pub use buffer::AudioBuffer;
 pub use error::{Error, Result};
+pub use ops::{cut, foldback, Cut, Fade, FadeShape, Foldback};
 pub use rational::Rational;
 pub use wav::{BitDepth, Wav, WriteSpec};

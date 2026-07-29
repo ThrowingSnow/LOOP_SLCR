@@ -21,6 +21,56 @@ fn archive() -> Option<PathBuf> {
     dir.is_dir().then_some(dir)
 }
 
+/// Every name in the archive, through the filename parser.
+///
+/// The unit tests cover the cases I picked; this covers the ones I did not
+/// think of. It asserts on the totals rather than on individual names, so a
+/// rule that starts guessing shows up as the count moving.
+#[test]
+fn filenames_yield_the_tempos_they_carry() {
+    let Some(dir) = archive() else {
+        eprintln!("LOOPSLCR_ARCHIVE not set — skipping name sweep");
+        return;
+    };
+
+    let mut with_tempo = Vec::new();
+    let mut without = Vec::new();
+    let mut with_bars = 0usize;
+
+    for entry in std::fs::read_dir(&dir).expect("archive unreadable") {
+        let path = entry.expect("bad dir entry").path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        match loopslcr_core::naming::tempo_from_name(&name) {
+            Some(t) => with_tempo.push((name.clone(), t)),
+            None => without.push(name.clone()),
+        }
+        if loopslcr_core::naming::bars_from_name(&name).is_some() {
+            with_bars += 1;
+        }
+    }
+
+    eprintln!(
+        "name sweep: {} with a tempo, {} without, {with_bars} with a bar count",
+        with_tempo.len(),
+        without.len()
+    );
+    for name in &without {
+        eprintln!("  no tempo: {name}");
+    }
+
+    // Every tempo found has to be one the grid can actually use.
+    for (name, tempo) in &with_tempo {
+        assert!(
+            tempo.value() > loopslcr_core::Rational::from_int(0),
+            "{name}: non-positive tempo"
+        );
+    }
+    assert!(!with_tempo.is_empty(), "no tempos found in {}", dir.display());
+}
+
 #[test]
 fn every_file_parses_and_matches_hound() {
     let Some(dir) = archive() else {

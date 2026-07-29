@@ -39,4 +39,10 @@ pub enum Error {
 
     #[error("output would be {0} bytes: past the 4 GiB a RIFF file can address")]
     FileTooLarge(u64),
+
+    #[error("a loop of zero length cannot be folded")]
+    EmptyLoop,
+
+    #[error("source holds {have} frames but the loop needs {need}: too short to fold")]
+    SourceShorterThanLoop { have: usize, need: usize },
 }

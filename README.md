@@ -1,9 +1,9 @@
 # LOOP_SLCR
 
-> **Status: M1 in progress.** The exact timing core and WAV I/O are built and
-> tested — reading verified against `hound` on 277 real files, writing verified
-> in both directions. Next are the `ops` and `loopslcr cut` itself.
-> See [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is done.
+> **Status: M1 complete.** Exact timing core, WAV read/write, `cut`, `foldback`
+> and `fade`, driven by `loopslcr cut`. The exit criterion is met: `--dry-run`
+> over the 279-file archive processes 261 and refuses 18 with a named reason.
+> See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the breakdown.
 
 A precision loop-trimming tool. Feed it a rendered drum loop with a warmup head and
 an FX tail; it returns a **sample-exact, seamless N-bar loop**, optionally transposed
@@ -38,6 +38,25 @@ single loop.
 | Bar length | 2.3301 s |
 | Total | 37.28 s + ~0.7 s tail |
 | Desired cut | 18.641 s → 37.282 s |
+
+### What it does today
+
+```console
+$ loopslcr cut "103 29Jul26 1Punkt1 Cstc.wav"
+  source       1875540 frames, 0:42.529  at 103 BPM (from filename), 4/4
+  shape        18.2521 bars, 17.5749 audible — warmup render (path A)
+  loop         8 bars (from file length), skip 8, align loop
+  path A — cut 822058 .. 1644116, tail discarded
+  fade         23 frames each end, Cosine
+  result       822058 frames, 0:18.641  peak 1.000000 (+0.00 dBFS)
+  length       -5.724 µs (-0.307 ppm)
+  out          103 29Jul26 1Punkt1 Cstc_103bpm_8bars.wav
+  wrote        4932560 bytes, 24-bit
+```
+
+Tempo, loop length and workflow are all read off the file; `--dry-run` reports
+the same without writing. Add `--bpm`, `--bars`, `--skip` or `--path` to override
+any of it.
 
 ---
 
@@ -143,7 +162,7 @@ archive of 279 loops. v1.0 adds a deliberately narrow JNI surface and a Compose 
 
 | Milestone | Content | |
 |---|---|---|
-| M1 | v0.1 core + CLI, exact cut math, dry-run over the archive | **in progress** |
+| M1 | v0.1 core + CLI, exact cut math, dry-run over the archive | **done** |
 | M2 | v0.2 varispeed, bit depth, dither, BPM tagging | |
 | M3 | v0.3 tape character with loop-periodic modulation | |
 | M4 | v0.4 batch processing, CLI feature-complete | |
@@ -168,13 +187,22 @@ Full detail in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Open questions
 
-- Micro-fades: default on (0.5 ms) or default off?
 - Peak buckets: computed in Rust and passed over JNI, or computed in Kotlin?
-- WAV reading: use `hound`, or hand-rolled for zero dependency? (Writing must be
-  hand-rolled — `hound` cannot write `acid`/`smpl` chunks.) **Blocks the next
-  task.**
 - Wow/flutter default depths, and whether character settings are presetable
 - iOS: worth it, or do CLI + Android cover the real workflow?
+
+### Answered while building
+
+- **Micro-fades** are path-dependent: on for a straight cut (0.5 ms, raised
+  cosine), off for a foldback — which is circular by construction, so fading
+  both ends to zero would undo the continuity it just computed.
+- **WAV reading is hand-rolled too**, sharing the chunk layer with the writer;
+  `hound` stays as a dev-dependency for cross-checking in both directions. It
+  paid for itself immediately: Caustic writes the RIFF size field 44 bytes
+  short, and believing it cost audio from the end of every export.
+- **There is no fixed `--bars` default.** The loop length is derived from the
+  file's own duration, because 8 bars is right for the reference render and
+  wrong for four fifths of the archive.
 
 ---
 

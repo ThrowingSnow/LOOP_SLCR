@@ -150,6 +150,89 @@ impl WorkflowGuess {
     }
 }
 
+/// Loop lengths worth considering, longest first.
+///
+/// Musical loop lengths, not arbitrary numbers: the archive's 279 files land on
+/// 4 bars (177), 8 (35), 16 (15) and 2 (7). Longest first so the coarsest
+/// interpretation that fits wins — see [`guess_loop_bars`].
+pub const LOOP_BAR_CANDIDATES: &[u64] = &[64, 32, 16, 8, 4, 2, 1];
+
+/// How close to a whole bar count a file has to land to count as that many
+/// bars. Relative, so a long loop is allowed proportionally more slack.
+pub const BAR_COUNT_TOLERANCE: f64 = 0.02;
+
+/// A loop length inferred from the file itself, with the shape that implied it.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct LoopGuess {
+    pub bars: u64,
+    pub workflow: Workflow,
+    pub bars_in_file: f64,
+}
+
+/// Infers the loop length from how many bars the file spans.
+///
+/// A fixed default cannot serve this: `--bars 8` is right for the reference
+/// render and wrong for four fifths of the archive, where the files are already
+/// 4-bar loops. What the file's own duration says is a better starting point
+/// than any constant.
+///
+/// The three shapes are tried in order of how much they claim about the file:
+///
+/// 1. The whole file *is* the loop (`total ≈ B`) — already trimmed.
+/// 2. The file is two loops plus a tail (`2B ≤ total < 3B`) — warmup render.
+/// 3. The file is one loop plus a tail (`B ≤ total < 2B`) — foldback.
+///
+/// Rule 1 first, because a 4-bar file is far more likely to be a finished 4-bar
+/// loop than two 2-bar loops rendered for warmup. Within each rule the longest
+/// candidate wins, so an 18.25-bar file reads as 8 bars plus warmup and tail
+/// rather than as 4 bars with a great deal left over.
+///
+/// The windows are half-open, so a length sitting exactly on a boundary — 3.00
+/// bars is both "1 bar rendered three times" and "2 bars plus a 1-bar tail" —
+/// can fall either side of it. That is inherent to reading intent from a
+/// duration, and it is why `--bars` exists. A guess is reported, never assumed.
+///
+/// **Only the total duration is consulted, deliberately.** Requiring rule 1 to
+/// find audio right up to the file's end would catch one case — an 8-bar file
+/// that is really a 4-bar loop with a 4-bar tail — at the cost of another: a
+/// sparse 8-bar drum loop whose last bar is silent would then read as a 4-bar
+/// warmup render, and half the phrase would be cut away. Between an unnecessary
+/// "nothing to do" and a silently halved loop, the first is the error to make.
+pub fn guess_loop_bars(grid: &Grid, frames: usize) -> Option<LoopGuess> {
+    let bar_frames = grid.samples_per_bar().to_f64();
+    if bar_frames <= 0.0 || frames == 0 {
+        return None;
+    }
+    let total = frames as f64 / bar_frames;
+
+    // The workflow comes from the rule that matched, not from a second look at
+    // the file: the rule *is* the conclusion about its shape, and re-deriving it
+    // through `WorkflowGuess::detect` would let the two disagree — a file read
+    // as "one loop plus a tail" here could come back as `Unclear` there.
+    let guess = |bars: u64, workflow: Workflow| {
+        Some(LoopGuess {
+            bars,
+            workflow,
+            bars_in_file: total,
+        })
+    };
+    let longest = |fits: &dyn Fn(f64) -> bool| {
+        LOOP_BAR_CANDIDATES.iter().copied().find(|&b| fits(b as f64))
+    };
+
+    // 1. The file is exactly the loop.
+    if let Some(bars) = longest(&|b| (total - b).abs() <= BAR_COUNT_TOLERANCE * b) {
+        return guess(bars, Workflow::AlreadyTrimmed);
+    }
+    // 2. Two loops plus a tail — the warmup render this tool is built for.
+    if let Some(bars) = longest(&|b| total >= 2.0 * b && total < 3.0 * b) {
+        return guess(bars, Workflow::WarmupRender);
+    }
+    // 3. One loop plus a tail.
+    let bars = longest(&|b| total >= b && total < 2.0 * b)?;
+    guess(bars, Workflow::TailFoldback)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,6 +371,58 @@ mod tests {
             WorkflowGuess::detect(&g, total, audible, 8).workflow,
             Workflow::TailFoldback
         );
+    }
+
+    #[test]
+    fn the_loop_length_comes_from_the_file() {
+        let g = grid_103();
+        let bar = g.samples_per_bar().to_f64();
+        let at = |bars: f64| (bars * bar) as usize;
+
+        // The reference render: 18.25 bars, audible to 17.57. Two 8-bar loops
+        // plus a tail — not four 4-bar loops, and not one 16-bar loop.
+        let r = guess_loop_bars(&g, at(18.2521)).unwrap();
+        assert_eq!(r.bars, 8);
+        assert_eq!(r.workflow, Workflow::WarmupRender);
+
+        // What the archive is full of: a finished 4-bar loop. Must read as one
+        // 4-bar loop, not as two 2-bar loops with warmup.
+        let r = guess_loop_bars(&g, at(4.0)).unwrap();
+        assert_eq!(r.bars, 4);
+        assert_eq!(r.workflow, Workflow::AlreadyTrimmed);
+
+        // Every length the archive actually contains, already trimmed.
+        for bars in [2u64, 4, 8, 16] {
+            let frames = at(bars as f64);
+            let r = guess_loop_bars(&g, frames).unwrap();
+            assert_eq!(r.bars, bars, "{bars}-bar file");
+            assert_eq!(r.workflow, Workflow::AlreadyTrimmed);
+        }
+
+        // Within tolerance of a whole count still lands on it: 4 bars minus a
+        // hair is a 4-bar loop, not a 2-bar warmup render.
+        let r = guess_loop_bars(&g, at(3.99)).unwrap();
+        assert_eq!(r.bars, 4);
+
+        // One loop plus a tail, with no warmup reading available: 3.5 bars is
+        // not two loops of anything, so it reads as a 2-bar loop plus a tail.
+        let r = guess_loop_bars(&g, at(3.5)).unwrap();
+        assert_eq!(r.bars, 2);
+        assert_eq!(r.workflow, Workflow::TailFoldback);
+
+        // A genuinely ambiguous length. 5.5 bars is either two 2-bar loops plus
+        // a 1.5-bar tail or one 4-bar loop plus the same tail, and nothing in
+        // the file distinguishes them. The warmup reading wins because that is
+        // how these renders are made — and `--bars 4` is right there for when
+        // it is not.
+        let r = guess_loop_bars(&g, at(5.5)).unwrap();
+        assert_eq!(r.bars, 2);
+        assert_eq!(r.workflow, Workflow::WarmupRender);
+
+        // Nothing to say about an empty file.
+        assert_eq!(guess_loop_bars(&g, 0), None);
+        // Or about one shorter than a single bar.
+        assert_eq!(guess_loop_bars(&g, at(0.4)), None);
     }
 
     /// Feeding a finished loop back in must not propose more work on it.

@@ -485,7 +485,18 @@ Ohne geteilten State sind es zwei Apps in einer APK statt einem Werkzeug.
 15. ~~Name~~ → **LOOP_SLCR**, Crates `loopslcr-*`, Binary `loopslcr`
 
 ### Noch offen ❓
-1. **Micro-Fades:** default an (0.5 ms) oder default aus?
+1. ~~**Micro-Fades:** default an (0.5 ms) oder default aus?~~ → **entschieden:
+    pfadabhängig.** An bei Pfad A (0.5 ms, Raised Cosine), aus bei Pfad B.
+    Grund: ein Foldback-Loop ist *konstruktionsbedingt* zirkulär stetig — ihn an
+    beiden Enden auf Null zu fahren würde genau die Stetigkeit zerstören, die
+    gerade errechnet wurde. Ein gerader Schnitt hat diese Garantie nicht, seine
+    Grenzen fallen dorthin, wo das Bar-Grid sie setzt, mitten in die Wellenform
+    oder nicht. `--fade <ms>` / `--no-fade` überschreiben.
+    **Der ehrliche Preis des Fades:** er ersetzt den Klick durch eine kurze
+    Pegelsenke von doppelter Fade-Länge, einmal pro Wiederholung. Bei 0.5 ms auf
+    perkussivem Material unhörbar, auf Flächen ein leiser Puls. Ohne Senke geht
+    nur ein zirkulärer Crossfade mit Material *vor* dem Loop-Start — das ändert
+    den Loop-Kopf und ist eine andere Operation.
 2. **Peak-Buckets:** in Rust berechnen und über JNI reichen, oder in Kotlin?
     (Rust = konsistent mit CLI-`info`, Kotlin = weniger JNI-Verkehr)
 3. ~~**WAV-Read:** `hound` behalten oder auch selbst?~~ → **selbst, entschieden
@@ -572,7 +583,23 @@ Ein Sweep mit `loopslcr info` über alle 279 Einträge (Details siehe
   8 Bars (35), 16 Bars (15), 2 Bars (7) landen innerhalb 2 % auf einer ganzen
   Bar-Zahl. **Die 4-Bar-Loops dominieren**, nicht die 8-Bar-Loops — der
   Default `--bars 8` passt zum Referenzfall, aber nicht zur Mehrheit des
-  Archivs.
+  Archivs. → **Konsequenz gezogen: es gibt keinen festen Default mehr.**
+  `analysis::guess_loop_bars()` liest die Loop-Länge aus der Dauer der Datei
+  selbst (Regel 1 „die Datei *ist* der Loop", Regel 2 „zwei Loops plus Tail",
+  Regel 3 „ein Loop plus Tail"). Über das Archiv ergibt das 4 Bars (191),
+  8 (40), 16 (15), 2 (13), 32 (1), 1 (1) — deckt sich mit der oben gemessenen
+  Verteilung. `--bars` überschreibt weiterhin.
+- **Der Tail wird beim Ableiten der Loop-Länge bewusst *nicht* herangezogen.**
+  Würde Regel 1 verlangen, dass Audio bis ans Dateiende reicht, fiele ein
+  sparsamer 8-Bar-Loop mit stiller letzter Bar auf „4-Bar-Warmup-Render" —
+  und die Hälfte der Phrase wäre weg. Zwischen einem unnötigen „nichts zu tun"
+  und einem still halbierten Loop ist der erste der Fehler, den man macht.
+- **106 Archivdateien sind zu kurz für einen exakten Loop** — im Median um
+  50 Frames, im schlimmsten Fall um 19 518. Ein früheres Tool hat abwärts
+  gerundet. 50 Frames pro Wiederholung sind trotzdem Drift, also verweigert ein
+  echter Lauf und benennt das Defizit; `--dry-run` berichtet es stattdessen,
+  weil ein Archiv-Überblick genau dann gebraucht wird. `--allow-short` nimmt
+  es bewusst in Kauf.
 - **`smpl`-Loop-Endpunkt ist mehrdeutig** — ✅ **entschieden.** Die Spec sagt
   inklusiv, aber `58.5 DL_4BAR_Lumiko Imai 01.wav` hat 787 199 Frames und
   `end = 787199` — inklusiv gelesen zeigte der Loop ein Frame über das
@@ -594,6 +621,13 @@ Ein Sweep mit `loopslcr info` über alle 279 Einträge (Details siehe
   `105CSTC-APRL02-…`, `00005 136BPM E01…` (Marker statt führend) und
   **`58.5 DL_4BAR_…` mit Dezimal-Tempo** — auf 58 gekürzt liegt die Datei
   daneben, mit 58.5 stimmt sie. 14 Dateien tragen gar kein Tempo im Namen.
+  → **Gebaut als `naming::tempo_from_name()`**, ohne Regex (null Dependencies).
+  Was die Fälle auseinanderhält, ist **Plausibilität**, nicht Position: eine Zahl
+  gilt nur als Tempo, wenn sie in 40..=300 liegt. Damit fallen Datum
+  (`29Jul26`), Take-Nummer (`01`), Bar-Zahl (`4BRS`) und Caustics `00005` von
+  selbst heraus. Ein explizites `BPM` schlägt die Position. Über das Archiv:
+  **264 mit Tempo, 15 ohne** — und alle 15 tragen wirklich keins (eines ist
+  eine `.zip`). Dazu `naming::bars_from_name()` für `4BRS` / `2BARS` / `8 BRS`.
 - **§3c Restfehler-Angabe präzisiert:** beim 103-BPM-Fall ist das Residual exakt
   **−26/103 Samples ≈ −5.724 µs ≈ −0.307 ppm**. Die Doku sagte „0.25 Samples
   ≈ 5.7 µs ≈ 0.3 ppm" — richtig gerundet, aber das Vorzeichen fehlte

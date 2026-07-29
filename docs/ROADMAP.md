@@ -61,19 +61,43 @@ of Android code exists.
       decode → encode round trip at the source depth is byte-identical
 - [x] End-to-end on the real reference file: 8-bar region cut from the Caustic
       export and written back, 822 058 frames, sample-for-sample unchanged
-- [ ] `ops::cut` — apply `Grid::region` to an `AudioBuffer`
-- [ ] `ops::foldback` — `out[i % loopLen] += tail[i]`, multi-wrap safe
-- [ ] `ops::fade` — micro-fades, configurable length
+- [x] `ops::cut` — apply `Grid::region` to an `AudioBuffer`, reporting a source
+      too short rather than quietly delivering a loop that drifts
+- [x] `ops::foldback` — `out[i % loopLen] += tail[i]`, multi-wrap safe, peak
+      reported so an overshoot is visible instead of clipped
+- [x] `ops::fade` — micro-fades, raised cosine, 0.5 ms default
+- [x] `analysis::detect_workflow` — path A vs path B vs already trimmed
+- [x] `analysis::guess_loop_bars` — loop length from the file's own duration
+- [x] `naming` — tempo and bar count from the filename, the archive's primary
+      tempo source since not one of its files carries an `acid` chunk
+- [x] CLI: `loopslcr cut <file> [flags]`
+- [x] **`--dry-run`** — cut points, residual in µs/ppm, tail length, shape; and
+      it *reports* a short source where a real run refuses it
 - [ ] `analysis::peaks` — min/max buckets for waveform display
-- [ ] `analysis::detect_workflow` — path A vs path B suggestion
-- [ ] CLI: `loopslcr cut <file> [flags]`
-- [ ] **`--dry-run`** — print cut points, residual error in µs/ppm, tail length; write nothing
 
-**Exit criterion:** `--dry-run` sweeps the existing `AUDIO/DRUMLOOPS/` archive
-and every reported cut point is verified correct.
+**Exit criterion — met.** `--dry-run` over all 279 archive entries:
+
+| | |
+|---|---|
+| processed | **261** |
+| already trimmed | 248 |
+| warmup renders (path A) | 8 |
+| one loop plus tail (path B) | 5 |
+| refused, with a named reason | 18 |
+
+The 18: **14** carry no tempo in the name and no `acid` chunk, **2** are zip
+archives, **2** are shorter than a single bar. No crash, no silent wrong answer.
+
+**106 files are short of an exact loop** — by a median of 50 frames, worst case
+19 518. These were trimmed by some earlier tool that rounded down, and 50 frames
+per repeat is still drift, so a real run refuses them and names the deficit;
+`--allow-short` accepts one knowingly.
+
+The derived loop lengths match the archive's own convention: 4 bars dominates,
+which is why there is no fixed `--bars` default any more.
 
 The archive holds 279 entries: **277 are WAVE files** (two of them without a
-`.wav` extension), plus two zip archives. The reader already sweeps all 277 —
+`.wav` extension), plus two zip archives. The reader also sweeps all 277 —
 see `tests/archive_sweep.rs`, gated behind `LOOPSLCR_ARCHIVE`.
 
 ---
