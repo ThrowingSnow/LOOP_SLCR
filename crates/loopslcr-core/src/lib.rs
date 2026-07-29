@@ -20,9 +20,13 @@
 
 #![deny(clippy::float_arithmetic)]
 
+pub mod buffer;
 pub mod error;
 pub mod rational;
 pub mod timing;
+pub mod wav;
 
+pub use buffer::AudioBuffer;
 pub use error::{Error, Result};
 pub use rational::Rational;
+pub use wav::Wav;

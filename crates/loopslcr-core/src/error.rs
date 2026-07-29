@@ -12,4 +12,22 @@ pub enum Error {
 
     #[error("invalid tempo {0:?}: expected a positive number, e.g. 103 or 103.5")]
     Tempo(String),
+
+    #[error("not a RIFF file")]
+    NotRiff,
+
+    #[error("RIFF file is not WAVE")]
+    NotWave,
+
+    #[error("malformed {0:?} chunk")]
+    MalformedChunk(&'static str),
+
+    #[error("no {0:?} chunk")]
+    MissingChunk(&'static str),
+
+    #[error("unsupported WAVE format tag {0:#06x}: only PCM and IEEE float are read")]
+    UnsupportedFormat(u16),
+
+    #[error("unsupported bit depth {0}: expected 16, 24 or 32-bit int, or 32/64-bit float")]
+    UnsupportedBitDepth(u16),
 }

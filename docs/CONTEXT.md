@@ -1,12 +1,14 @@
 # LOOP_SLCR — Kontextfile (Session-Übergabe)
 
 > **Zweck:** Diese Datei in einen neuen Chat ziehen → Claude Van Damme ist sofort auf Stand.
-> **Status:** TIMING-CORE STEHT. Cargo-Workspace angelegt, `rational.rs` +
-> `timing/{signature,tempo,grid}.rs` implementiert, 28 Unit-Tests + Doctest
-> grün, Clippy sauber. Der 103-BPM-Referenzfall reproduziert die Docs exakt
+> **Status:** TIMING-CORE + WAV-READER STEHEN. Cargo-Workspace, `rational.rs`,
+> `timing/`, `buffer.rs`, `wav/{chunks,read}.rs`, CLI `grid` + `info`.
+> 60 Tests grün, Clippy sauber, null Runtime-Dependencies im Core.
+> Der 103-BPM-Referenzfall reproduziert die Docs exakt
 > (in 822058 = 0:18.641, out 1644116 = 0:37.282).
-> Nächster Schritt: RIFF-Reader → `AudioBuffer` → `ops::cut`, danach ist
-> `--dry-run` über das Archiv real (279 Files, Pfad in §7 bestätigt).
+> **Reader gegen das echte Archiv verifiziert:** 277 WAVE-Dateien,
+> 177 790 491 Frames, sample-für-sample identisch mit `hound`.
+> Nächster Schritt: RIFF-Writer → `ops::cut` → `ops::foldback`.
 > **Letztes Update:** Session 2 — 29.07.2026
 
 ---
@@ -538,13 +540,53 @@ Guter Kandidat, um endlich mal etwas **fertig** zu veröffentlichen.
 8. Dann RIFF-Reader → `AudioBuffer` → `ops::cut` → `ops::foldback`
 9. `--dry-run` über das Archiv → Annahmen validieren (M1-Exit)
 
+### Was das Archiv über die echten Dateien verrät
+
+Ein Sweep mit `loopslcr info` über alle 279 Einträge (Details siehe
+`tests/archive_sweep.rs`, aktivierbar über `LOOPSLCR_ARCHIVE`):
+
+| Befund | Zahl |
+|---|---|
+| WAVE-Dateien | **277** — zwei davon **ohne `.wav`-Endung** (`78-SMPL.BRN-…`) |
+| Keine Audio-Dateien | 2 zip |
+| Parse-Fehler | **0** |
+| PCM 16-bit stereo | 141 |
+| PCM 24-bit stereo | 75 |
+| PCM 16-bit mono | 46 |
+| PCM 32-bit stereo / mono | 8 / 5 |
+| 44.1 kHz / 48 kHz | 239 / 36 |
+| `WAVE_FORMAT_EXTENSIBLE` | **1** (`120-lilDRM-APRL09-02-Mstr 01.wav`) |
+| Dateien mit echten Chunks | 9 — nur `LIST` und `smpl` |
+| **`acid`-Chunks** | **0** |
+
+**Konsequenzen:**
+
+- **Kein `acid`-Chunk im ganzen Archiv.** Die Hoffnung, das Tempo aus der Datei
+  zu lesen statt aus dem Namen, trägt für den Bestand nicht — `--bpm-from-name`
+  bleibt der Hauptweg. Für die *Ausgabe* schreiben wir ihn natürlich trotzdem.
+- **Nach Endung filtern wäre falsch:** zwei echte WAVs haben keine. Der Sweep
+  prüft stattdessen die Magic Bytes `RIFF`/`WAVE`.
+- **`WAVE_FORMAT_EXTENSIBLE` kommt real vor** — der Pfad ist kein Theoriefall.
+- **Bar-Verteilung** über die 261 Dateien mit Tempo im Namen: 4 Bars (177),
+  8 Bars (35), 16 Bars (15), 2 Bars (7) landen innerhalb 2 % auf einer ganzen
+  Bar-Zahl. **Die 4-Bar-Loops dominieren**, nicht die 8-Bar-Loops — der
+  Default `--bars 8` passt zum Referenzfall, aber nicht zur Mehrheit des
+  Archivs.
+- **`smpl`-Loop-Endpunkt ist mehrdeutig.** Die Spec sagt inklusiv, aber
+  `58.5 DL_4BAR_Lumiko Imai 01.wav` hat 787 199 Frames und `end = 787199` —
+  inklusiv gelesen zeigte der Loop ein Frame über das Dateiende hinaus. Der
+  Encoder meint hier exklusiv. Beim Schreiben des `smpl`-Chunks entscheiden,
+  beim Lesen nicht blind vertrauen.
+
 ### Was beim Bauen auffiel
 
 - **Der Archivpfad ist bestätigt:** `IT'S_ME!/ALL STUFF OF ME/AUDIO/DRUMLOOPS/`
   enthält **exakt 279** WAVs.
 - **`--bpm-from-name` braucht mehr als `^(\d{2,3})\b`.** Im Archiv liegen
   `102-MTRX-01.wav` (kein Wortende nach der Zahl, `\b` greift nicht wie gedacht),
-  `105CSTC-APRL02-…` und `00005 136BPM E01…`. Für M1 kein Blocker, für v0.4 notiert.
+  `105CSTC-APRL02-…`, `00005 136BPM E01…` (Marker statt führend) und
+  **`58.5 DL_4BAR_…` mit Dezimal-Tempo** — auf 58 gekürzt liegt die Datei
+  daneben, mit 58.5 stimmt sie. 14 Dateien tragen gar kein Tempo im Namen.
 - **§3c Restfehler-Angabe präzisiert:** beim 103-BPM-Fall ist das Residual exakt
   **−26/103 Samples ≈ −5.724 µs ≈ −0.307 ppm**. Die Doku sagte „0.25 Samples
   ≈ 5.7 µs ≈ 0.3 ppm" — richtig gerundet, aber das Vorzeichen fehlte
@@ -556,6 +598,11 @@ Guter Kandidat, um endlich mal etwas **fertig** zu veröffentlichen.
   §3.1 vorgesehen: gegen `i128` kosten die Checks nichts messbar, ein stiller
   Wrap würde dagegen einen Cut-Punkt unbemerkt verfälschen.
 - **`#![deny(clippy::float_arithmetic)]`** auf dem Core macht Invariante 2
-  („Floats nur in der Sample-Domäne") build-geprüft. Genau drei Ausnahmen,
-  alle einzeln begründet und reine Anzeige: `Rational::to_f64`,
-  `Residual::micros`, `Residual::ppm`.
+  („Floats nur in der Sample-Domäne") build-geprüft. Drei einzeln begründete
+  Ausnahmen in der Timing-Domäne, alle reine Anzeige: `Rational::to_f64`,
+  `Residual::micros`, `Residual::ppm`. `buffer.rs` und `wav/read.rs` erlauben
+  Floats modulweit — sie *sind* die Sample-Domäne, und das Attribut markiert
+  die Grenze sichtbar.
+- **CLI panickte bei `| head`.** Rust ignoriert SIGPIPE per Default, also
+  knallt jedes `println!` in eine geschlossene Pipe. Behoben: Ausgabe geht
+  über einen Puffer, `BrokenPipe` beendet sauber mit Exit-Code 0.

@@ -3,7 +3,8 @@
 > Name fixed: **LOOP_SLCR**. Crates are `loopslcr-core` / `loopslcr-cli` /
 > `loopslcr-jni`, the binary is `loopslcr`.
 >
-> **Status:** M1 in progress — the timing core is done, audio I/O is next.
+> **Status:** M1 in progress — timing core and WAV reading are done and
+> verified against the archive; the writer and `ops::cut` are next.
 > Last updated 29.07.2026.
 
 ## Vision
@@ -41,23 +42,32 @@ of Android code exists.
 - [x] `#![deny(clippy::float_arithmetic)]` on the core — invariant 1 enforced by
       the build, with three individually justified display-only exceptions
 
-### Audio — next
+### Audio — in progress
 
-- [ ] RIFF reader: PCM 16/24/32-bit int, 32-bit float, mono/stereo, WAVE_FORMAT_EXTENSIBLE
+- [x] RIFF reader: PCM 16/24/32-bit int, 32/64-bit float, mono/stereo,
+      WAVE_FORMAT_EXTENSIBLE — hand-rolled, zero runtime dependencies
+- [x] Chunk layer shared with the writer: `fmt `, `data`, `acid`, `smpl`,
+      `LIST`/`INFO`, unknown chunks skipped, odd sizes padded correctly
+- [x] `AudioBuffer` — planar f64 internal representation
+- [x] Verified against `hound` (dev-dependency only) on synthetic files and on
+      the whole archive: 277 files, 177 790 491 frames, zero mismatches
+- [x] CLI: `loopslcr info <file>`
 - [ ] RIFF writer: bit depth selectable, chunk-aware
-- [ ] `AudioBuffer` — planar f64 internal representation
 - [ ] `ops::cut` — apply `Grid::region` to an `AudioBuffer`
 - [ ] `ops::foldback` — `out[i % loopLen] += tail[i]`, multi-wrap safe
 - [ ] `ops::fade` — micro-fades, configurable length
 - [ ] `analysis::peaks` — min/max buckets for waveform display
 - [ ] `analysis::tail` — tail length via −60 dBFS threshold
 - [ ] `analysis::detect_workflow` — path A vs path B suggestion
-- [ ] CLI: `loopslcr info <file>`
 - [ ] CLI: `loopslcr cut <file> [flags]`
 - [ ] **`--dry-run`** — print cut points, residual error in µs/ppm, tail length; write nothing
 
 **Exit criterion:** `--dry-run` sweeps the existing `AUDIO/DRUMLOOPS/` archive
-(279 files, confirmed present) and every reported cut point is verified correct.
+and every reported cut point is verified correct.
+
+The archive holds 279 entries: **277 are WAVE files** (two of them without a
+`.wav` extension), plus two zip archives. The reader already sweeps all 277 —
+see `tests/archive_sweep.rs`, gated behind `LOOPSLCR_ARCHIVE`.
 
 ---
 
@@ -97,10 +107,12 @@ of Android code exists.
 ## v0.4 — Batch + Ergonomics
 
 - [ ] `loopslcr batch <dir>` with rayon parallelism
-- [ ] `--bpm-from-name` — regex `^(\d{2,3})\b` is not enough on its own: the
-      archive also holds `102-MTRX-01.wav`, `105CSTC-APRL02-...` and
-      `00005 136BPM E01...`, so the separator must be optional and a trailing
-      `BPM` marker recognised anywhere in the name
+- [ ] `--bpm-from-name` — regex `^(\d{2,3})\b` is not enough on its own. The
+      archive holds `102-MTRX-01.wav` and `105CSTC-APRL02-...` (no word break
+      after the number), `00005 136BPM E01...` (marker, not leading), and
+      `58.5 DL_4BAR_...` (**decimal tempo** — truncating it to 58 puts the file
+      off the grid). 14 files carry no tempo in the name at all and need it
+      passed in.
 - [ ] Per-directory preset file (`loopslcr.toml`)
 - [ ] Progress reporting, per-file error collection, non-fatal continue
 - [ ] `--out-dir` with structure preservation

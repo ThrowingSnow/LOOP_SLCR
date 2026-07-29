@@ -9,3 +9,10 @@ repository.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+
+[dev-dependencies]
+# Reference implementation to check the hand-rolled reader against. Not a
+# runtime dependency: hound cannot write acid/smpl chunks, which is why the
+# reader and writer are our own. It earns its place the same way rubato will
+# later -- as a trusted second opinion in tests.
+hound = "3.5"
