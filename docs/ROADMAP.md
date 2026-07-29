@@ -1,7 +1,11 @@
-# LOOPCUT — Roadmap
+# LOOP_SLCR — Roadmap
 
-> Working title **LOOPCUT**, repository **LOOP_SLICR**. Crate names are
-> placeholders until the name is fixed.
+> Name fixed: **LOOP_SLCR**. Crates are `loopslcr-core` / `loopslcr-cli` /
+> `loopslcr-jni`, the binary is `loopslcr`. The working title LOOPCUT still
+> appears in the other docs.
+>
+> **Status:** M1 in progress — the timing core is done, audio I/O is next.
+> Last updated 29.07.2026.
 
 ## Vision
 
@@ -10,7 +14,7 @@ and an FX tail; it returns a sample-exact, seamless N-bar loop, optionally
 transposed by tape varispeed, with the resulting tempo declared in the file.
 
 Two front ends, one core:
-- **`loopcut` CLI** — Linux, batch-capable, the daily driver
+- **`loopslcr` CLI** — Linux, batch-capable, the daily driver
 - **Android APK** — two tabs (Cutter / Calculator), touch-first, tape-riding preview
 
 Targets: **Linux CLI first, Android APK second.** macOS/Windows CLI come free.
@@ -22,27 +26,39 @@ Targets: **Linux CLI first, Android APK second.** macOS/Windows CLI come free.
 The goal is a tool that is genuinely useful on the desktop before a single line
 of Android code exists.
 
-- [ ] Cargo workspace scaffold (`loopcut-core`, `loopcut-cli`)
-- [ ] `Rational` — exact `i128` rational arithmetic, round-half-up
-- [ ] `TimeSignature`, `BpmUnit`, `Tempo`, `Grid`
-- [ ] `Grid::cut_sample(bar)` — exact cut points, no floats
+### Timing core — done
+
+- [x] Cargo workspace scaffold (`loopslcr-core`, `loopslcr-cli`)
+- [x] `Rational` — exact `i128` rational arithmetic, round-half-up
+- [x] `TimeSignature`, `BpmUnit`, `Tempo`, `Grid`
+- [x] `Grid::cut_sample(bar)` — exact cut points, no floats
+- [x] `Grid::region(skip, bars, align)` — the index math behind `ops::cut`,
+      with `Align::Loop` / `Align::Grid`
+- [x] Residual error reporting (µs / ppm), for the cut-in and for the length
+- [x] `Grid::sample_exact_bpms` — the nearest tempos needing no rounding
+- [x] `Tempo` parsing: `103`, `103.5` and `207/2`, all held exactly
+- [x] CLI: `loopslcr grid` — the part of `--dry-run` that needs no audio
+- [x] Unit tests: known-good cut points for 4/4, 3/4, 7/8, 6/8 at 44.1/48 kHz
+- [x] `#![deny(clippy::float_arithmetic)]` on the core — invariant 1 enforced by
+      the build, with three individually justified display-only exceptions
+
+### Audio — next
+
 - [ ] RIFF reader: PCM 16/24/32-bit int, 32-bit float, mono/stereo, WAVE_FORMAT_EXTENSIBLE
 - [ ] RIFF writer: bit depth selectable, chunk-aware
 - [ ] `AudioBuffer` — planar f64 internal representation
-- [ ] `ops::cut` — with `Align::Loop` / `Align::Grid`
+- [ ] `ops::cut` — apply `Grid::region` to an `AudioBuffer`
 - [ ] `ops::foldback` — `out[i % loopLen] += tail[i]`, multi-wrap safe
 - [ ] `ops::fade` — micro-fades, configurable length
 - [ ] `analysis::peaks` — min/max buckets for waveform display
 - [ ] `analysis::tail` — tail length via −60 dBFS threshold
 - [ ] `analysis::detect_workflow` — path A vs path B suggestion
-- [ ] CLI: `loopcut info <file>`
-- [ ] CLI: `loopcut cut <file> [flags]`
+- [ ] CLI: `loopslcr info <file>`
+- [ ] CLI: `loopslcr cut <file> [flags]`
 - [ ] **`--dry-run`** — print cut points, residual error in µs/ppm, tail length; write nothing
-- [ ] Residual error reporting (µs / ppm)
-- [ ] Unit tests: known-good cut points for 4/4, 3/4, 7/8, 6/8 at 44.1/48 kHz
 
 **Exit criterion:** `--dry-run` sweeps the existing `AUDIO/DRUMLOOPS/` archive
-(279+ files) and every reported cut point is verified correct.
+(279 files, confirmed present) and every reported cut point is verified correct.
 
 ---
 
@@ -81,9 +97,12 @@ of Android code exists.
 
 ## v0.4 — Batch + Ergonomics
 
-- [ ] `loopcut batch <dir>` with rayon parallelism
-- [ ] `--bpm-from-name` — regex `^(\d{2,3})\b`
-- [ ] Per-directory preset file (`loopcut.toml`)
+- [ ] `loopslcr batch <dir>` with rayon parallelism
+- [ ] `--bpm-from-name` — regex `^(\d{2,3})\b` is not enough on its own: the
+      archive also holds `102-MTRX-01.wav`, `105CSTC-APRL02-...` and
+      `00005 136BPM E01...`, so the separator must be optional and a trailing
+      `BPM` marker recognised anywhere in the name
+- [ ] Per-directory preset file (`loopslcr.toml`)
 - [ ] Progress reporting, per-file error collection, non-fatal continue
 - [ ] `--out-dir` with structure preservation
 - [ ] Shell completions (fish, bash, zsh)
@@ -94,7 +113,7 @@ of Android code exists.
 
 ## v1.0 — Android APK
 
-- [ ] `loopcut-jni` cdylib, `cargo-ndk` integration
+- [ ] `loopslcr-jni` cdylib, `cargo-ndk` integration
 - [ ] Gradle ↔ cargo build wiring
 - [ ] JNI surface: `analyze`, `process`, `previewCreate/Read/SetRatio/Seek/Destroy`
 - [ ] Direct `ByteBuffer` transfer for PCM (no copies)
@@ -162,7 +181,7 @@ of Android code exists.
 
 | Milestone | Content | Status |
 |---|---|---|
-| M1 | v0.1 Core + CLI, exact cut math, dry-run over the archive | TODO |
+| M1 | v0.1 Core + CLI, exact cut math, dry-run over the archive | **IN PROGRESS** — timing core done, audio I/O next |
 | M2 | v0.2 Varispeed, bit depth, dither, BPM tagging | TODO |
 | M3 | v0.3 Tape character with loop-periodic modulation | TODO |
 | M4 | v0.4 Batch processing, CLI feature-complete | TODO |
@@ -174,9 +193,12 @@ of Android code exists.
 
 ## Open Questions
 
-- Project name
+- ~~Project name~~ → **LOOP_SLCR**, crates `loopslcr-*`, binary `loopslcr`
 - Micro-fades: default on (0.5 ms) or default off?
 - Peak buckets: computed in Rust and passed over JNI, or computed in Kotlin?
 - WAV reading: keep `hound`, or hand-rolled for zero dependency?
+  (blocks the next task — the writer has to be hand-rolled either way for
+  `acid`/`smpl`, so reading it too costs perhaps 200 lines and drops the
+  dependency entirely)
 - Wow/flutter default depths — and should character settings be presetable?
 - iOS: worth it, or does the CLI plus Android cover the real workflow?
