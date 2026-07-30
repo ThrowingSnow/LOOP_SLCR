@@ -1,7 +1,11 @@
 [package]
 name = "loopslcr-jni"
+description = "JNI bridge exposing the LOOP_SLCR core to the Android front end"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [lib]
 name = "loopslcr_jni"
