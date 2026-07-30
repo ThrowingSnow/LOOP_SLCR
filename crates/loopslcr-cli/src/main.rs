@@ -228,7 +228,8 @@ struct CutFlags {
     #[arg(long)]
     normalize: bool,
 
-    /// TPDF dither: `auto` applies it only when the bit depth drops.
+    /// Dither: `auto` applies flat TPDF only when the bit depth drops,
+    /// `shaped` adds noise shaping, `on` forces flat, `off` refuses.
     #[arg(long, default_value = "auto")]
     dither: DitherArg,
 
@@ -288,10 +289,13 @@ struct CutFlags {
 /// When to dither.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 enum DitherArg {
-    /// Only when the bit depth drops, which is the only time it helps.
+    /// Flat TPDF, but only when the bit depth drops — the only time it helps.
     Auto,
-    /// Always, for integer output.
+    /// Flat TPDF, always, for integer output.
     On,
+    /// TPDF plus second-order noise shaping: the added noise is pushed above
+    /// 15 kHz, costing total noise power to buy about 10 dB where it is heard.
+    Shaped,
     Off,
 }
 
@@ -896,6 +900,7 @@ fn run_cut(file: &Path, out: Out, args: &Settings) -> Result<Cut, Box<dyn Error>
     let mode = match args.dither {
         DitherArg::Off => Dither::None,
         DitherArg::On => Dither::Tpdf,
+        DitherArg::Shaped => Dither::Shaped,
         DitherArg::Auto => {
             if dither::is_called_for(format.bits_per_sample, args.depth) {
                 Dither::Tpdf
@@ -905,11 +910,21 @@ fn run_cut(file: &Path, out: Out, args: &Settings) -> Result<Cut, Box<dyn Error>
         }
     };
     match dither::apply(&mut cut_buffer, args.depth, mode, args.dither_seed) {
-        Some(_) => writeln!(
+        Some(applied) => writeln!(
             s,
-            "  dither       TPDF ±1 LSB at {} bit, seed {}",
+            "  dither       {} at {} bit, seed {}{}",
+            if applied.quantised {
+                "TPDF ±1 LSB, 2nd-order shaped"
+            } else {
+                "TPDF ±1 LSB"
+            },
             args.depth.bits(),
-            args.dither_seed
+            args.dither_seed,
+            // Worth saying, because it is the one place a stage downstream of
+            // the dither would be a mistake: the samples are already on the
+            // output grid, so anything touching them now would need dithering
+            // all over again.
+            if applied.quantised { ", already quantised" } else { "" }
         )?,
         None if args.dither == DitherArg::Auto && !args.depth.is_float() => writeln!(
             s,

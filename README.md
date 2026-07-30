@@ -1,6 +1,6 @@
 # LOOP_SLCR
 
-> **Status: v0.1 through v0.4 complete** bar noise-shaped dither. The whole
+> **Status: v0.1 through v0.4 complete.** The whole
 > chain runs — read → cut → foldback → fade → varispeed → tape character →
 > normalize → dither → write — behind `loopslcr cut`, and `loopslcr batch` puts
 > the whole 279-file archive through it in **1.3 seconds**: 261 cut, 16 refused
@@ -193,7 +193,9 @@ length = `round(bars · samplesPerBar)`) or **grid priority** (both markers on g
   stays continuous by construction; plus HF rolloff and head bump, both scaling
   their corner frequencies with playback speed. One bypass switch, and with it off
   the output is byte-identical to the clean path
-- Bit depth selectable (16/24/32f) with TPDF dither
+- Bit depth selectable (16/24/32f) with TPDF dither, optionally noise-shaped:
+  `--dither shaped` puts the noise where the ear is not, buying >8 dB below 5 kHz
+  for 7.78 dB more of it in total
 - BPM declared four ways: filename template, `acid` chunk, `smpl` chunk, `LIST/INFO`
 - **Batch** — a directory at a time on every core, carrying on past the files it
   cannot cut and naming each reason; deterministic output regardless of thread

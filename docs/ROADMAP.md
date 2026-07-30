@@ -3,7 +3,8 @@
 > Name fixed: **LOOP_SLCR**. Crates are `loopslcr-core` / `loopslcr-cli` /
 > `loopslcr-jni`, the binary is `loopslcr`.
 >
-> **Status:** M1–M4 done, bar noise-shaped dither. The whole chain runs:
+> **Status:** M1–M4 done, v0.2 now complete including noise-shaped dither.
+> The whole chain runs:
 > read → cut → foldback → fade → varispeed → tape character → normalize → dither
 > → write, and `loopslcr batch` puts the 279-file archive through it in 1.3
 > seconds. Next is M5, the Android APK. Last updated 30.07.2026.
@@ -126,7 +127,21 @@ see `tests/archive_sweep.rs`, gated behind `LOOPSLCR_ARCHIVE`.
       the file actually plays at after varispeed
 - [x] Peak check + overshoot warning (no auto-normalize)
 - [x] `--normalize` as an explicit opt-in
-- [ ] Noise-shaped dither (TPDF is in; shaping is the optional refinement)
+- [x] Noise-shaped dither — `--dither shaped`, second-order `(1 - z⁻¹)²`
+
+**What shaping buys and what it costs, measured on silence at 16 bit:** below
+5 kHz the added noise drops by more than 8 dB, above 15 kHz it rises by more
+than 6 dB, and the *total* noise power rises by 7.78 dB. That last figure is not
+tuned — `(1 - z⁻¹)²` has coefficients 1, −2, 1, so the power gain is 1 + 4 + 1 = 6,
+and the test asserts the prediction rather than the observation.
+
+Shaping needs the quantisation error to feed back, so `Dither::Shaped`
+**quantises as well as dithering** — there is no way to feed back an error that
+has not been made yet. It leaves the samples exactly on the target grid, so the
+writer's own rounding becomes a no-op and `wav::write` needs no special case.
+The fed-back error is clamped at ±2 LSB: without that, a passage sitting at full
+scale clips the quantiser and the shaper rings on the clipping error, putting a
+burst of noise exactly where the music is loudest.
 
 **What varispeed gets right that a nominal ratio would not:** the output length
 comes from `Grid::resampled_length`, which divides the *exact* bar mathematics

@@ -601,6 +601,23 @@ Ohne geteilten State sind es zwei Apps in einer APK statt einem Werkzeug.
   beide zu `78-SMPL` und die zweite Ausgabe weigerte sich, die erste zu
   überschreiben — 260 von 261. `naming::output_stem` streicht eine Endung jetzt
   nur, wenn es sie als Audio-Endung kennt.
+
+### Noise-Shaping nachgereicht (30.07.2026)
+
+- **`--dither shaped` quantisiert mit.** Shaping braucht den Quantisierungsfehler
+  als Rückkopplung, und den gibt es nicht, bevor quantisiert wurde. Also liegen
+  die Samples danach exakt auf dem Zielraster, das Runden im Writer ist ein
+  No-Op, und `wav::write` braucht keinen Sonderfall — das ist die Naht, die
+  verhindert, dass das ins Encoding durchsickert.
+- **`(1 - z⁻¹)²`, zweiter Ordnung.** Koeffizienten 1, −2, 1 → Leistungsgewinn
+  1 + 4 + 1 = 6 = **7,78 dB mehr Rauschen insgesamt**, dafür >8 dB weniger unter
+  5 kHz und >6 dB mehr über 15 kHz. Der Test prüft die *Vorhersage* aus dem
+  Filter, nicht die Beobachtung — driftet die Implementierung vom Filter weg,
+  sagt er es.
+- **Fehler-Rückkopplung auf ±2 LSB begrenzt.** Ohne das klippt ein Vollpegel-
+  Passus den Quantisierer, der Klipping-Fehler geht in die Rückkopplung, und der
+  Shaper klingelt darauf — ein Rauschstoss genau dort, wo die Musik am lautesten
+  ist.
   `auto` dithert nur, wenn die Bittiefe **sinkt**; bei gleicher oder steigender
   wäre das Rauschen reiner Verlust.
 
