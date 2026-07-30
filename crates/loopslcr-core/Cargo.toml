@@ -11,8 +11,15 @@ repository.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-# Reference implementation to check the hand-rolled reader against. Not a
-# runtime dependency: hound cannot write acid/smpl chunks, which is why the
-# reader and writer are our own. It earns its place the same way rubato will
-# later -- as a trusted second opinion in tests.
+audioadapter-buffers = "2.0"
+# Reference implementations, checked against in tests only. Neither is a runtime
+# dependency, and for the same reason in both cases: the job needs something the
+# library cannot do.
+#
+# hound cannot write acid/smpl chunks, which is why the reader and writer are
+# our own. rubato cannot resample circularly, which a loop requires -- reading
+# zeros past the ends drains energy from exactly the seam this tool exists to
+# make seamless. Both stay as trusted second opinions, and the RIFF size-field
+# bug is what that arrangement is worth.
 hound = "3.5"
+rubato = { version = "1.0", default-features = false }

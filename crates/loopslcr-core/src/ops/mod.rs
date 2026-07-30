@@ -10,9 +10,15 @@
 //! because the right answer differs between a batch run and a preview.
 
 pub mod cut;
+pub mod dither;
 pub mod fade;
 pub mod foldback;
+pub mod gain;
+pub mod resample;
 
 pub use cut::{cut, Cut};
+pub use dither::Dither;
 pub use fade::{Fade, FadeShape};
 pub use foldback::{foldback, Foldback};
+pub use gain::Peak;
+pub use resample::{resample, Resampler};

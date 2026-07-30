@@ -6,9 +6,11 @@
 
 use std::fmt;
 
+use crate::error::Result;
 use crate::rational::Rational;
 
 use super::signature::TimeSignature;
+use super::speed::Ratio;
 use super::tempo::Tempo;
 
 /// Which of the two constraints wins when the bar length is not a whole number
@@ -180,6 +182,45 @@ impl Grid {
             sample_rate: self.sample_rate,
             exact_samples: exact,
         }
+    }
+
+    /// Sample count of `bars` bars after a varispeed of `ratio`.
+    ///
+    /// **Not** `cut_length / ratio`. The cut length is already rounded, so
+    /// dividing it rounds a second time and the result can miss the true value
+    /// by a sample. Dividing the exact bar mathematics first keeps it to the one
+    /// rounding the docs allow:
+    ///
+    /// ```text
+    /// wrong:  round( round(bars · samplesPerBar) / ratio )
+    /// right:  round( bars · samplesPerBar / ratio )
+    /// ```
+    ///
+    /// This is the length the resampler must be asked for. Its effective ratio
+    /// is then defined by the two integer lengths rather than by the nominal
+    /// speed — an error far below a part per million in pitch, in exchange for
+    /// an output that is exactly as long as the new tempo requires.
+    pub fn resampled_length(&self, bars: u64, ratio: Ratio) -> u64 {
+        let exact = self.exact_sample(bars);
+        let scaled = match ratio.as_rational() {
+            Some(r) => (exact / r).round_half_up(),
+            // No rational to divide by, so the one rounding happens in f64.
+            #[allow(clippy::float_arithmetic)]
+            None => (exact.to_f64() / ratio.to_f64()).round() as i128,
+        };
+        debug_assert!(scaled >= 0, "negative length after varispeed");
+        scaled.max(0) as u64
+    }
+
+    /// The grid a loop lands on after a varispeed of `ratio`.
+    ///
+    /// The sample rate does not change — this is resampling, not a rate
+    /// conversion. What changes is the tempo, and with it every bar line.
+    pub fn scaled(&self, ratio: Ratio) -> Result<Grid> {
+        Ok(Grid {
+            tempo: ratio.resulting_tempo(self.tempo)?,
+            ..*self
+        })
     }
 
     /// True when `bars` bars are an exact whole number of samples at this
@@ -395,6 +436,64 @@ mod tests {
         // The advice the CLI will print for 103 BPM.
         assert_eq!(list.iter().rev().find(|&&b| b < 103), Some(&100));
         assert_eq!(list.iter().find(|&&b| b > 103), Some(&105));
+    }
+
+    /// The reason `resampled_length` exists rather than a division at the call
+    /// site. Verified independently against exact fractions.
+    #[test]
+    fn dividing_the_rounded_length_can_be_a_sample_wrong() {
+        let g = grid(103, "4/4", 44_100);
+        let cut = g.region(8, 8, Align::Loop).len(); // 822058, already rounded
+
+        // Half speed. Dividing the exact bar mathematics gives 1644117;
+        // dividing the rounded cut length gives 1644116 — one sample short, and
+        // a sample short is a loop that drifts.
+        let half = Ratio::from_semitones(-12.0).unwrap();
+        assert_eq!(g.resampled_length(8, half), 1_644_117);
+        assert_eq!(half.output_frames(cut as usize), 1_644_116);
+
+        // Where they agree they must keep agreeing — this is not a licence to
+        // differ everywhere.
+        for ratio in [
+            Ratio::from_semitones(12.0).unwrap(),
+            Ratio::from_percent(Rational::new(50, 1)).unwrap(),
+            Ratio::from_tempi(Tempo::bpm(103).unwrap(), Tempo::bpm(90).unwrap()).unwrap(),
+        ] {
+            assert_eq!(
+                g.resampled_length(8, ratio),
+                ratio.output_frames(cut as usize) as u64,
+                "{ratio}"
+            );
+        }
+    }
+
+    #[test]
+    fn fitting_to_an_exact_tempo_removes_the_rounding_entirely() {
+        // 8 bars of 4/4 at 90 BPM and 44.1 kHz is 940800 samples exactly, so
+        // resampling 103 → 90 lands on a whole number with no residual at all.
+        let g = grid(103, "4/4", 44_100);
+        let to_90 = Ratio::from_tempi(Tempo::bpm(103).unwrap(), Tempo::bpm(90).unwrap()).unwrap();
+        assert_eq!(g.resampled_length(8, to_90), 940_800);
+
+        let scaled = g.scaled(to_90).unwrap();
+        assert_eq!(scaled.tempo.value(), Rational::from_int(90));
+        assert!(scaled.is_sample_exact(8));
+        assert_eq!(scaled.exact_sample(8).round_half_up(), 940_800);
+        // The sample rate is untouched: this is resampling, not rate conversion.
+        assert_eq!(scaled.sample_rate, 44_100);
+        assert_eq!(scaled.sig, g.sig);
+    }
+
+    #[test]
+    fn unity_speed_changes_no_length() {
+        let g = grid(103, "7/8", 48_000);
+        for bars in [1u64, 4, 8, 16] {
+            assert_eq!(
+                g.resampled_length(bars, Ratio::UNITY),
+                g.exact_sample(bars).round_half_up() as u64
+            );
+        }
+        assert_eq!(g.scaled(Ratio::UNITY).unwrap(), g);
     }
 
     #[test]

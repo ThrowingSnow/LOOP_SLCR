@@ -1,8 +1,10 @@
 # LOOP_SLCR
 
-> **Status: M1 complete.** Exact timing core, WAV read/write, `cut`, `foldback`
-> and `fade`, driven by `loopslcr cut`. The exit criterion is met: `--dry-run`
-> over the 279-file archive processes 261 and refuses 18 with a named reason.
+> **Status: v0.1 and v0.2 complete** bar noise-shaped dither. The whole chain
+> runs — read → cut → foldback → fade → varispeed → normalize → dither → write —
+> behind `loopslcr cut`. `--dry-run` over the 279-file archive processes 261 and
+> refuses 18 with a named reason. **No runtime dependencies** in the core;
+> `hound` and `rubato` are test-only second opinions.
 > See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the breakdown.
 
 A precision loop-trimming tool. Feed it a rendered drum loop with a warmup head and
@@ -57,6 +59,19 @@ $ loopslcr cut "103 29Jul26 1Punkt1 Cstc.wav"
 Tempo, loop length and workflow are all read off the file; `--dry-run` reports
 the same without writing. Add `--bpm`, `--bars`, `--skip` or `--path` to override
 any of it.
+
+Varispeed fits a loop to another tempo, exactly:
+
+```console
+$ loopslcr cut "103 29Jul26 1Punkt1 Cstc.wav" --target-bpm 90
+  varispeed    -2.336 st (-233.6 cents), -12.621 % speed, ratio 0.873786408 = 90/103
+               103 BPM → 90 BPM, 940800 frames, exact ratio
+  length       940800 vs 940800.0000 exact at 90 BPM — sample-exact
+```
+
+The ratio 90/103 is a fraction, so the new length is exact rather than rounded
+twice — and 8 bars at 90 BPM happens to be a whole 940 800 samples, leaving no
+residual at all. `--snap` on its own finds the nearest tempo where that is true.
 
 ---
 

@@ -1,7 +1,12 @@
-//! Measuring a file: where the tail starts, and which workflow it came from.
+//! Measuring a file: where the tail starts, which workflow it came from, and
+//! what its waveform looks like.
 
 // The sample domain.
 #![allow(clippy::float_arithmetic)]
+
+pub mod peaks;
+
+pub use peaks::{Bucket, Peaks};
 
 use crate::buffer::AudioBuffer;
 use crate::timing::Grid;

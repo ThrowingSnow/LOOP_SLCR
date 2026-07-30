@@ -3,9 +3,10 @@
 > Name fixed: **LOOP_SLCR**. Crates are `loopslcr-core` / `loopslcr-cli` /
 > `loopslcr-jni`, the binary is `loopslcr`.
 >
-> **Status:** M1 in progress — timing core and WAV reading are done and
-> verified against the archive; the writer and `ops::cut` are next.
-> Last updated 29.07.2026.
+> **Status:** M1 done, M2 (v0.2) done bar noise-shaped dither. The whole chain
+> runs: read → cut → foldback → fade → varispeed → normalize → dither → write,
+> with `--dry-run` verified over the 279-file archive.
+> Last updated 30.07.2026.
 
 ## Vision
 
@@ -42,7 +43,7 @@ of Android code exists.
 - [x] `#![deny(clippy::float_arithmetic)]` on the core — invariant 1 enforced by
       the build, with three individually justified display-only exceptions
 
-### Audio — in progress
+### Audio — done
 
 - [x] RIFF reader: PCM 16/24/32-bit int, 32/64-bit float, mono/stereo,
       WAVE_FORMAT_EXTENSIBLE — hand-rolled, zero runtime dependencies
@@ -73,7 +74,8 @@ of Android code exists.
 - [x] CLI: `loopslcr cut <file> [flags]`
 - [x] **`--dry-run`** — cut points, residual in µs/ppm, tail length, shape; and
       it *reports* a short source where a real run refuses it
-- [ ] `analysis::peaks` — min/max buckets for waveform display
+- [x] `analysis::peaks` — min/max buckets for waveform display, plus an ASCII
+      waveform in `info --waveform` so the code is exercised, not just written
 
 **Exit criterion — met.** `--dry-run` over all 279 archive entries:
 
@@ -104,21 +106,36 @@ see `tests/archive_sweep.rs`, gated behind `LOOPSLCR_ARCHIVE`.
 
 ## v0.2 — Varispeed + Output Formats
 
-- [ ] `Resampler` trait
-- [ ] `RubatoResampler` — fixed-ratio offline export path
-- [ ] Anti-alias cutoff scaling: `cutoff = 0.5 / max(1, ratio)`
-- [ ] `Taper` — semitone law + speed law, both directions
-- [ ] Drive modes: pitch-driven, BPM-driven, snap-to-sample-exact
-- [ ] `--pitch <st|cents>` / `--target-bpm <n>` / `--snap`
+- [x] `Resampler` trait
+- [x] `SincResampler` — **hand-rolled, not rubato.** Windowed sinc,
+      Blackman–Harris, 32 zero crossings. Two things rubato cannot do: take the
+      output length as an *input*, and read the kernel **circularly** so the
+      seam keeps its level. rubato stays a dev-dependency reference, as hound is
+- [x] Anti-alias cutoff scaling: `cutoff = 0.5 / max(1, step)`, with the kernel
+      widened by the same factor so the zero-crossing count holds
+- [x] `Ratio` — semitone law + speed law + BPM fitting, exact where it can be
+- [x] Drive modes: pitch-driven, BPM-driven, snap-to-sample-exact
+- [x] `--pitch <st|cents>` / `--target-bpm <n>` / `--snap`
 - [x] Bit depth selection: 16 / 24 / 32 / 32f (`BitDepth`, default 24)
-- [ ] TPDF dither (noise shaping optional, later) — only place quantisation
-      still rounds bare
+- [x] TPDF dither, ±1 LSB, **deterministically seeded** so the reproducibility
+      invariant survives it; `auto` applies it only when the depth drops
 - [x] `acid` chunk writer — tempo, beats, meter, loop flag
 - [x] `smpl` chunk writer — loop points (spec-inclusive `end`), unity note
 - [x] `LIST/INFO` → `ICMT` plain-text tag
-- [ ] Filename template `{name}_{bpm}bpm_{bars}bars.wav`
-- [ ] Peak check + overshoot warning (no auto-normalize)
-- [ ] `--normalize` as an explicit opt-in
+- [x] Filename template `{name}_{bpm}bpm_{bars}bars.wav`, named with the tempo
+      the file actually plays at after varispeed
+- [x] Peak check + overshoot warning (no auto-normalize)
+- [x] `--normalize` as an explicit opt-in
+- [ ] Noise-shaped dither (TPDF is in; shaping is the optional refinement)
+
+**What varispeed gets right that a nominal ratio would not:** the output length
+comes from `Grid::resampled_length`, which divides the *exact* bar mathematics
+rather than the already-rounded cut length. At 103 BPM, 8 bars, half speed, those
+two differ: 1 644 117 against 1 644 116. One sample short is a loop that drifts.
+
+Fitting 103 → 90 BPM is exact — the ratio is 90/103 — and lands on 940 800
+samples with no residual whatsoever. `--snap` alone nudges 103 → 105 BPM, +33
+cents, and buys the same exactness for a loop that had none.
 
 ---
 

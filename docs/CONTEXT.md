@@ -1,15 +1,19 @@
 # LOOP_SLCR — Kontextfile (Session-Übergabe)
 
 > **Zweck:** Diese Datei in einen neuen Chat ziehen → Claude Van Damme ist sofort auf Stand.
-> **Status:** TIMING-CORE + WAV-READER STEHEN. Cargo-Workspace, `rational.rs`,
-> `timing/`, `buffer.rs`, `wav/{chunks,read}.rs`, CLI `grid` + `info`.
-> 60 Tests grün, Clippy sauber, null Runtime-Dependencies im Core.
+> **Status:** v0.1 UND v0.2 STEHEN (bis auf noise-shaped Dither).
+> Die ganze Kette läuft: read → cut → foldback → fade → varispeed →
+> normalize → dither → write, gesteuert von `loopslcr cut`.
+> 178 Tests grün, Clippy sauber, **null Runtime-Dependencies im Core**
+> (`hound` und `rubato` sind dev-only Gegenproben).
 > Der 103-BPM-Referenzfall reproduziert die Docs exakt
 > (in 822058 = 0:18.641, out 1644116 = 0:37.282).
 > **Reader gegen das echte Archiv verifiziert:** 277 WAVE-Dateien,
 > 177 790 491 Frames, sample-für-sample identisch mit `hound`.
-> Nächster Schritt: RIFF-Writer → `ops::cut` → `ops::foldback`.
-> **Letztes Update:** Session 2 — 29.07.2026
+> **`--dry-run` über alle 279 Archiv-Einträge:** 261 verarbeitet,
+> 18 mit benanntem Grund verweigert.
+> Nächster Schritt: v0.3 Tape-Charakter, oder v0.4 Batch.
+> **Letztes Update:** Session 3 — 30.07.2026
 
 ---
 
@@ -483,6 +487,37 @@ Ohne geteilten State sind es zwei Apps in einer APK statt einem Werkzeug.
 13. ~~Grid vs. Loop~~ → **sichtbarer Toggle**
 14. ~~Docs~~ → generiert, siehe `docs/`
 15. ~~Name~~ → **LOOP_SLCR**, Crates `loopslcr-*`, Binary `loopslcr`
+
+### v0.2-Entscheidungen (30.07.2026)
+
+- **Der Resampler ist selbstgeschrieben, nicht `rubato`** — und zwar aus einem
+  fachlichen Grund, nicht aus Dependency-Askese: **rubato kann nicht zirkulär
+  resamplen.** Ein Loop *ist* periodisch, das Sample vor dem Anfang ist das
+  Sample kurz vor dem Ende. Liest der Kernel dort Nullen — was jeder
+  Allzweck-Resampler tut, weil er es nicht wissen kann — verliert genau die
+  Naht Energie, die dieses Tool nahtlos machen soll. Gemessen: gegen die
+  analytische Lösung ist unser Fehler an der Naht < 1e-4, rubatos > 0.01.
+  Im Innenraum stimmen beide auf < 1e-3 überein, also ist der Kernel richtig.
+  `rubato` bleibt dev-dependency-Gegenprobe, wie `hound`.
+- **Die Ausgabelänge ist ein *Eingabe*-Parameter des Resamplers.** Sie kommt aus
+  `Grid::resampled_length()`, das die *exakte* Bar-Arithmetik teilt, nicht die
+  schon gerundete Schnittlänge. Bei 103 BPM, 8 Bars, halber Geschwindigkeit
+  unterscheiden die beiden sich: **1 644 117 gegen 1 644 116.** Ein Sample zu
+  kurz ist ein driftender Loop. Das effektive Verhältnis ergibt sich dann aus
+  den zwei Ganzzahl-Längen — Tonhöhenfehler weit unter einem ppm, dafür eine
+  Länge, die exakt stimmt.
+- **Zwei der drei Antriebsarten sind exakt.** 103 → 90 BPM ist das Verhältnis
+  90/103 und landet auf glatten **940 800 Samples, Residual null**. Prozent sind
+  exakt, ganze Oktaven auch. Nur ein Halbton ist irrational — `Ratio` hält den
+  Unterschied als Enum fest, statt alles in f64 zu werfen.
+- **`--snap` allein ist ein eigenes Feature:** es zieht 103 → 105 BPM (+33 Cent)
+  und macht damit einen Loop sample-exakt, der es nicht war.
+- **Der Dither-Seed ist fest.** Invariante 4 verlangt, dass gleiche Eingabe und
+  gleiche Parameter für immer byte-identisch ausgeben — ein zufällig geseedeter
+  Dither bricht das bei jedem Lauf. Also eine deterministische Folge, die nur
+  wie Rauschen aussieht. `--dither-seed` für einen anderen Zug.
+  `auto` dithert nur, wenn die Bittiefe **sinkt**; bei gleicher oder steigender
+  wäre das Rauschen reiner Verlust.
 
 ### Noch offen ❓
 1. ~~**Micro-Fades:** default an (0.5 ms) oder default aus?~~ → **entschieden:

@@ -2,7 +2,10 @@ use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, Error, PartialEq, Eq, Clone)]
+/// `PartialEq` but not `Eq`: one variant carries an `f64`, and reporting the
+/// offending ratio as a number is worth more than a total-equality bound nothing
+/// asks for.
+#[derive(Debug, Error, PartialEq, Clone)]
 pub enum Error {
     #[error("invalid time signature {0:?}: expected N/D with N > 0 and D > 0, e.g. 7/8")]
     TimeSignature(String),
@@ -39,6 +42,15 @@ pub enum Error {
 
     #[error("output would be {0} bytes: past the 4 GiB a RIFF file can address")]
     FileTooLarge(u64),
+
+    #[error("invalid speed ratio {0}: expected a positive, finite number")]
+    SpeedRatio(f64),
+
+    #[error("cannot resample an empty buffer")]
+    EmptyResampleInput,
+
+    #[error("cannot resample to zero frames")]
+    EmptyResampleOutput,
 
     #[error("a loop of zero length cannot be folded")]
     EmptyLoop,

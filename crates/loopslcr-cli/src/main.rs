@@ -8,10 +8,11 @@ use std::process::ExitCode;
 use std::str::FromStr;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use loopslcr_core::analysis::{self, Tail, Workflow, WorkflowGuess};
+use loopslcr_core::analysis::{self, Peaks, Tail, Workflow, WorkflowGuess};
 use loopslcr_core::naming;
-use loopslcr_core::ops::{cut, foldback, Fade, FadeShape};
-use loopslcr_core::timing::{Align, BpmUnit, Grid, Tempo, TimeSignature};
+use loopslcr_core::ops::resample::{Edge, Resampler, SincResampler};
+use loopslcr_core::ops::{cut, dither, foldback, gain, Dither, Fade, FadeShape};
+use loopslcr_core::timing::{Align, BpmUnit, Grid, Ratio, Tempo, TimeSignature};
 use loopslcr_core::wav::{chunks::Chunks, write, BitDepth, Metadata, SampleFormat, Wav, WriteSpec};
 
 #[derive(Parser)]
@@ -48,6 +49,10 @@ enum Command {
         /// Skip decoding: no peak, no tail measurement, no workflow guess.
         #[arg(long)]
         no_peak: bool,
+
+        /// Draw the waveform this many columns wide.
+        #[arg(long, num_args = 0..=1, default_missing_value = "72")]
+        waveform: Option<usize>,
     },
 
     /// Trim a rendered loop to a sample-exact N-bar loop.
@@ -97,9 +102,40 @@ enum Command {
         #[arg(long = "path", value_enum, default_value_t = PathArg::Auto)]
         workflow: PathArg,
 
+        /// Varispeed by an interval: `-2.34` semitones, or `-234c` in cents.
+        /// Pitch and tempo move together, tape style.
+        #[arg(long, allow_hyphen_values = true)]
+        pitch: Option<String>,
+
+        /// Varispeed to land on this tempo. Exact: the ratio is a fraction.
+        #[arg(long = "target-bpm", conflicts_with = "pitch")]
+        target_bpm: Option<Tempo>,
+
+        /// Nudge the resulting tempo to the nearest one where the loop is a
+        /// whole number of samples. On its own, makes the loop sample-exact.
+        #[arg(long)]
+        snap: bool,
+
+        /// Search radius in BPM for --snap.
+        #[arg(long = "snap-window", default_value_t = 15)]
+        snap_window: u32,
+
         /// Output bit depth: 16, 24, 32, or 32f.
         #[arg(long, default_value = "24")]
         depth: BitDepth,
+
+        /// Scale the loop so its peak sits at full scale. Off by default: a
+        /// level change is a decision about the material.
+        #[arg(long)]
+        normalize: bool,
+
+        /// TPDF dither: `auto` applies it only when the bit depth drops.
+        #[arg(long, default_value = "auto")]
+        dither: DitherArg,
+
+        /// Dither seed. Fixed by default so runs reproduce byte for byte.
+        #[arg(long = "dither-seed", default_value_t = dither::DEFAULT_SEED)]
+        dither_seed: u64,
 
         /// Micro-fade length in milliseconds. Defaults to 0.5 ms on a straight
         /// cut and to none on a foldback, which is seamless already.
@@ -159,6 +195,39 @@ enum Command {
         #[arg(long, default_value_t = 15)]
         window: u32,
     },
+}
+
+/// When to dither.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum DitherArg {
+    /// Only when the bit depth drops, which is the only time it helps.
+    Auto,
+    /// Always, for integer output.
+    On,
+    Off,
+}
+
+/// Parses `--pitch`: bare digits are semitones, a trailing `c` means cents.
+///
+/// Two units on one flag rather than two flags, because they are one law — and
+/// `-234c` is how the interval reads on a tape machine's own scale.
+fn parse_pitch(text: &str) -> Result<Ratio, Box<dyn Error>> {
+    let trimmed = text.trim();
+    let (number, in_cents) = match trimmed.strip_suffix(['c', 'C']) {
+        Some(rest) => (rest, true),
+        // `st`, `s` and a bare number all mean semitones.
+        None => (trimmed.trim_end_matches(['s', 'S', 't', 'T']), false),
+    };
+    let value: f64 = number
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid --pitch {text:?}: expected -2.34 or -234c"))?;
+    let ratio = if in_cents {
+        Ratio::from_cents(value)
+    } else {
+        Ratio::from_semitones(value)
+    };
+    Ok(ratio?)
 }
 
 /// Which of the two render shapes the source has.
@@ -225,12 +294,24 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             bpm_unit,
             bars,
             no_peak,
+            waveform,
         } => {
             let bytes = std::fs::read(&file)
                 .map_err(|e| format!("{}: {e}", file.display()))?;
             let wav = Wav::parse(&bytes).map_err(|e| format!("{}: {e}", file.display()))?;
             let size_error = Chunks::size_field_error(&bytes).unwrap_or(0);
-            render_info(&file, bytes.len(), size_error, &wav, bpm, sig, bpm_unit, bars, !no_peak)?
+            render_info(
+                &file,
+                bytes.len(),
+                size_error,
+                &wav,
+                bpm,
+                sig,
+                bpm_unit,
+                bars,
+                !no_peak,
+                waveform,
+            )?
         }
         Command::Cut {
             file,
@@ -244,7 +325,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             bpm_unit,
             align,
             workflow,
+            pitch,
+            target_bpm,
+            snap,
+            snap_window,
             depth,
+            normalize,
+            dither,
+            dither_seed,
             fade,
             no_fade,
             dry_run,
@@ -262,7 +350,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             bpm_unit,
             align: align.into(),
             workflow,
+            pitch,
+            target_bpm,
+            snap,
+            snap_window,
             depth,
+            normalize,
+            dither,
+            dither_seed,
             fade,
             no_fade,
             dry_run,
@@ -304,7 +399,14 @@ struct CutArgs {
     bpm_unit: BpmUnit,
     align: Align,
     workflow: PathArg,
+    pitch: Option<String>,
+    target_bpm: Option<Tempo>,
+    snap: bool,
+    snap_window: u32,
     depth: BitDepth,
+    normalize: bool,
+    dither: DitherArg,
+    dither_seed: u64,
     fade: Option<f64>,
     no_fade: bool,
     dry_run: bool,
@@ -502,20 +604,82 @@ fn run_cut(args: CutArgs) -> Result<String, Box<dyn Error>> {
         )?;
     }
 
-    let peak = cut_buffer.peak();
-    writeln!(
-        s,
-        "  result       {} frames, {}  peak {peak:.6} {}",
-        cut_buffer.frames(),
-        timecode(cut_buffer.frames() as u64, format.sample_rate),
-        dbfs(peak)
-    )?;
-    if peak > 1.0 && args.depth.clips() {
-        // Reported, not fixed: normalising is a decision about the material,
-        // and `--normalize` is a later milestone.
+    // Varispeed, after the cut: the bar grid is exact in the original domain,
+    // so resampling last costs one rounding of the output length instead of
+    // compounding with the cut. The order is binding.
+    let ratio = resolve_ratio(&args, &grid, bars)?;
+    let final_tempo = ratio.resulting_tempo(tempo).map_err(|e| named(e.to_string()))?;
+    if !ratio.is_unity() {
+        let target = grid.resampled_length(bars, ratio) as usize;
+        // The length comes from the grid at the new tempo, never from
+        // `old_length / ratio` — that would round a second time.
+        cut_buffer = SincResampler::default()
+            .with_edge(Edge::Wrap)
+            .resample(&cut_buffer, target)
+            .map_err(|e| named(e.to_string()))?;
+        writeln!(s, "  varispeed    {ratio}")?;
         writeln!(
             s,
-            "  ! peak is past full scale — {}-bit output will clip. Use --depth 32f",
+            "               {tempo} → {final_tempo}, {} frames{}",
+            cut_buffer.frames(),
+            if ratio.is_exact() { ", exact ratio" } else { "" }
+        )?;
+    }
+
+    let mut peak = gain::Peak::measure(&cut_buffer);
+    if args.normalize {
+        if let Some(factor) = gain::normalize(&mut cut_buffer, gain::FULL_SCALE) {
+            writeln!(
+                s,
+                "  normalize    ×{factor:.6} ({:+.2} dB), peak {:.6} → 1.000000",
+                20.0 * factor.log10(),
+                peak.value
+            )?;
+            peak = gain::Peak::measure(&cut_buffer);
+        }
+    }
+
+    // Dither immediately before quantisation, and only when the depth actually
+    // drops — noise added at or above the source depth is pure loss.
+    let mode = match args.dither {
+        DitherArg::Off => Dither::None,
+        DitherArg::On => Dither::Tpdf,
+        DitherArg::Auto => {
+            if dither::is_called_for(format.bits_per_sample, args.depth) {
+                Dither::Tpdf
+            } else {
+                Dither::None
+            }
+        }
+    };
+    match dither::apply(&mut cut_buffer, args.depth, mode, args.dither_seed) {
+        Some(_) => writeln!(
+            s,
+            "  dither       TPDF ±1 LSB at {} bit, seed {}",
+            args.depth.bits(),
+            args.dither_seed
+        )?,
+        None if args.dither == DitherArg::Auto && !args.depth.is_float() => writeln!(
+            s,
+            "  dither       none ({} bit in, {} bit out — no depth reduction)",
+            format.bits_per_sample,
+            args.depth.bits()
+        )?,
+        None => {}
+    }
+
+    writeln!(
+        s,
+        "  result       {} frames, {}  peak {:.6} {}",
+        cut_buffer.frames(),
+        timecode(cut_buffer.frames() as u64, format.sample_rate),
+        peak.value,
+        dbfs(peak.value)
+    )?;
+    if peak.clips() && args.depth.clips() {
+        writeln!(
+            s,
+            "  ! peak is past full scale — {}-bit output will clip. Use --normalize or --depth 32f",
             args.depth.bits()
         )?;
     }
@@ -529,11 +693,31 @@ fn run_cut(args: CutArgs) -> Result<String, Box<dyn Error>> {
             "  length       {missing} frames short — drifts {:.3} ms per repeat",
             missing as f64 / format.sample_rate as f64 * 1000.0
         )?;
-    } else {
+    } else if ratio.is_unity() {
         writeln!(s, "  length       {}", grid.length_residual(skip_bars, bars, args.align))?;
+    } else {
+        // After a varispeed the residual to report is against the *new* grid:
+        // the old one no longer describes this file.
+        let scaled = grid.scaled(ratio).map_err(|e| named(e.to_string()))?;
+        let exact = scaled.exact_sample(bars);
+        writeln!(
+            s,
+            "  length       {} vs {:.4} exact at {final_tempo}{}",
+            cut_buffer.frames(),
+            exact.to_f64(),
+            if scaled.is_sample_exact(bars) {
+                " — sample-exact"
+            } else {
+                ""
+            }
+        )?;
     }
 
-    let dest = args.out.clone().unwrap_or_else(|| default_output(file, &tempo, bars));
+    // The output is named and tagged with the tempo it actually plays at.
+    let dest = args
+        .out
+        .clone()
+        .unwrap_or_else(|| default_output(file, &final_tempo, bars));
     writeln!(s, "  out          {}", dest.display())?;
 
     if args.dry_run {
@@ -553,14 +737,19 @@ fn run_cut(args: CutArgs) -> Result<String, Box<dyn Error>> {
 
     let beats = bars * args.sig.num as u64;
     let comment = format!(
-        "LOOP_SLCR: {tempo}, {} bars, {}, {} frames",
+        "LOOP_SLCR: {final_tempo}, {} bars, {}, {} frames{}",
         bars,
         args.sig,
-        cut_buffer.frames()
+        cut_buffer.frames(),
+        if ratio.is_unity() {
+            String::new()
+        } else {
+            format!(" (varispeed {:+.3} st from {tempo})", ratio.semitones())
+        }
     );
     let spec = WriteSpec::new(args.depth).with_metadata(
         Metadata::for_loop(
-            tempo.value().to_f64() as f32,
+            final_tempo.value().to_f64() as f32,
             u32::try_from(beats).unwrap_or(u32::MAX),
             args.sig.num as u16,
             args.sig.den as u16,
@@ -573,6 +762,47 @@ fn run_cut(args: CutArgs) -> Result<String, Box<dyn Error>> {
     writeln!(s, "  wrote        {} bytes, {}-bit", encoded.len(), args.depth.bits())?;
 
     Ok(s)
+}
+
+/// The varispeed ratio the flags ask for.
+///
+/// `--snap` is the interesting one: it nudges the *resulting* tempo to the
+/// nearest at which the loop is a whole number of samples, reusing the same
+/// search that `loopslcr grid` prints. On its own — no pitch, no target — it
+/// makes an otherwise inexact loop exact for the price of a few cents.
+fn resolve_ratio(args: &CutArgs, grid: &Grid, bars: u64) -> Result<Ratio, Box<dyn Error>> {
+    let source = grid.tempo;
+    let wanted = match (&args.pitch, args.target_bpm) {
+        (Some(text), _) => parse_pitch(text)?,
+        (None, Some(target)) => Ratio::from_tempi(source, target)?,
+        (None, None) => Ratio::UNITY,
+    };
+    if !args.snap {
+        return Ok(wanted);
+    }
+
+    // Candidates are searched around the tempo the varispeed lands on, not
+    // around the source tempo.
+    let landing = wanted.resulting_tempo(source)?;
+    let near = Grid { tempo: landing, ..*grid };
+    if near.is_sample_exact(bars) {
+        return Ok(wanted);
+    }
+    let Some(best) = near
+        .sample_exact_bpms(bars, args.snap_window)
+        .into_iter()
+        .filter_map(|bpm| Tempo::bpm(bpm).ok())
+        // Nearest in BPM, compared as exact fractions — `Rational` is `Ord`, so
+        // this needs no float and no scaled integer key.
+        .min_by_key(|t| (t.value() - landing.value()).abs())
+    else {
+        return Err(format!(
+            "no sample-exact tempo within ±{} BPM of {landing} for {bars} bars",
+            args.snap_window
+        )
+        .into());
+    };
+    Ok(Ratio::from_tempi(source, best)?)
 }
 
 /// Where the loop length came from. Not cosmetic: the shape of the file is read
@@ -646,6 +876,7 @@ fn render_info(
     bpm_unit: BpmUnit,
     loop_bars: u64,
     decode: bool,
+    waveform: Option<usize>,
 ) -> Result<String, Box<dyn Error>> {
     let mut s = String::new();
     let format = wav.format();
@@ -697,6 +928,11 @@ fn render_info(
     if let Some(buf) = &decoded {
         let peak = buf.peak();
         writeln!(s, "  peak         {peak:.6}  {}", dbfs(peak))?;
+
+        if let Some(columns) = waveform {
+            writeln!(s)?;
+            write!(s, "{}", draw_waveform(buf, columns.clamp(8, 400)))?;
+        }
     }
 
     let tags = wav.tags();
@@ -893,6 +1129,46 @@ fn render_grid(grid: &Grid, skip: u64, bars: u64, align: Align, window: u32) -> 
         };
     }
     s
+}
+
+/// A waveform as text, one line per channel, min/max mapped to a ramp of marks.
+///
+/// Uses the same min/max buckets the Android display will: a one-frame transient
+/// stays visible at any width, where averaging would hide it at some zooms and
+/// not others.
+fn draw_waveform(buffer: &loopslcr_core::AudioBuffer, columns: usize) -> String {
+    // Coarse to fine. A bucket that holds any signal at all must not render as
+    // a blank, or the display would claim silence where there is none.
+    const MARKS: [char; 8] = [' ', '.', ':', '-', '=', '+', '*', '#'];
+
+    let peaks = Peaks::measure(buffer, columns);
+    let mut out = String::new();
+    for (channel, buckets) in peaks.channels.iter().enumerate() {
+        let line: String = buckets
+            .iter()
+            .map(|b| {
+                let m = b.magnitude();
+                if m <= 0.0 {
+                    MARKS[0]
+                } else {
+                    // Log scale over 60 dB: linear would leave every tail
+                    // looking like silence.
+                    #[allow(clippy::float_arithmetic)]
+                    let level = (1.0 + m.log10() / 3.0).clamp(0.0, 1.0);
+                    #[allow(clippy::float_arithmetic)]
+                    let index = 1 + (level * (MARKS.len() - 2) as f64).round() as usize;
+                    MARKS[index.min(MARKS.len() - 1)]
+                }
+            })
+            .collect();
+        let _ = writeln!(out, "  {} |{line}|", ["L", "R"].get(channel).unwrap_or(&"·"));
+    }
+    let _ = writeln!(
+        out,
+        "     {} frames per column, log scale over 60 dB",
+        peaks.frames_per_bucket
+    );
+    out
 }
 
 fn timecode(samples: u64, sample_rate: u32) -> String {
