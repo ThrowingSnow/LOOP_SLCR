@@ -12,7 +12,9 @@
 > 177 790 491 Frames, sample-für-sample identisch mit `hound`.
 > **`--dry-run` über alle 279 Archiv-Einträge:** 261 verarbeitet,
 > 18 mit benanntem Grund verweigert.
-> Nächster Schritt: v0.3 Tape-Charakter, oder v0.4 Batch.
+> Nächster Schritt: v0.4 Batch. v0.3 Tape-Charakter ist gebaut — Wow/Flutter als
+> loop-periodische **Positions**-Verschiebung (nicht als modulierte Rate), damit die
+> Länge invariant bleibt und die Naht per Konstruktion stetig ist.
 > **Letztes Update:** Session 3 — 30.07.2026
 
 ---
@@ -407,7 +409,8 @@ loopslcr batch ./drumloops --bpm-from-name --bars 8 -o ./cut/
 Flags: `--sig 7/8` · `--bpm-unit 1/4` · `--align loop|grid` · `--fade 1ms`
 · `--normalize` · `--dry-run` · `--bits 16|24|32f` · `--dither tpdf|none`
 · `--pitch -2.34st` **oder** `--target-bpm 90` · `--tag acid,smpl,info`
-· `--tape off|on` · `--wow 0.3` · `--flutter 0.15` · `--hf-rolloff auto`
+· `--tape` · `--wow 0.3` · `--flutter 0.15` · `--hf-rolloff auto|off|<Hz>`
+· `--head-bump 2|off` — jeder Charakter-Flag impliziert `--tape`
 
 - **`--dry-run` ist der wichtigste Flag:** druckt Cut-Punkte, Restfehler in µs/ppm,
   Tail-Länge — schreibt nichts. Damit einmal über die 279 Archiv-Loops laufen und
@@ -516,6 +519,47 @@ Ohne geteilten State sind es zwei Apps in einer APK statt einem Werkzeug.
   gleiche Parameter für immer byte-identisch ausgeben — ein zufällig geseedeter
   Dither bricht das bei jedem Lauf. Also eine deterministische Folge, die nur
   wie Rauschen aussieht. `--dither-seed` für einen anderen Zug.
+
+### v0.3-Entscheidungen (30.07.2026)
+
+- **Wow/Flutter moduliert die *Position*, nicht die Rate.** §3f hatte das Problem
+  richtig benannt (moduliertes Ratio → Länge stimmt nicht mehr) und als Lösung
+  quantisierte LFO-Raten plus Zero-Mean vorgesehen. Umgesetzt ist die stärkere
+  Form: die Modulation ist eine **Verschiebung** der Leseposition,
+  `p(j) = j + D(j)` mit loop-periodischem `D`. Damit folgt beides ohne
+  Näherung — der Ausgabeindex läuft weiter in Einerschritten, also gibt es
+  nichts zu runden; und `D` ist loop-periodisch, also ist die Naht stetig. Die
+  Ratenabweichung ist `D'(j)`, und das Integral der Ableitung einer periodischen
+  Funktion über ihre Periode ist **exakt** null. Zero-mean ist hier ein Satz,
+  keine Kalibrierung.
+- **`D(0)` wird absichtlich *nicht* auf null gezwungen.** Ein erzwungener Knoten
+  an der Naht wäre ein Fixpunkt der Modulation einmal pro Repeat — genau das
+  Ticken, das der ganze Ansatz vermeidet. Ein `D(0) ≠ 0` verschiebt nur den
+  ganzen Loop um einen Sample-Bruchteil.
+- **Die Tiefe ist eine Geschwindigkeitsabweichung**, wie eine Bandmaschine
+  spezifiziert wird. Die Verschiebung folgt daraus als `A = depth · N / (2π k)`,
+  also verschiebt ein langsames Wobbeln bei gleicher Tiefe viel weiter als ein
+  schnelles: 0,3 % Wow auf 21 s sind ±22 Frames, dieselben 0,3 % Flutter unter
+  einem. Diese Asymmetrie ist physikalisch — sie ist der Grund, warum Wow als
+  Tonhöhenbewegung und Flutter als Rauhigkeit gehört wird.
+- **Kein Zufall im Charakter.** Echtes Wow driftet zufällig; das hier nicht, weil
+  eine Zufallskomponente entweder die Byte-Reproduzierbarkeit bricht oder einen
+  Seed braucht — und ein geseedeter Pseudo-Zufall ist auf einem Zwei-Sekunden-Loop
+  sowieso ein festes Muster. Zwei Sinusse auf unverwandten Raten klingen über
+  einen Loop schon unregelmässig genug.
+- **Filter nach dem Wobbeln, nie umgekehrt.** `run_periodic` kann den
+  Einschwingvorgang nur für ein Filter mit *festen* Koeffizienten wegheben (Loop
+  zweimal durchlaufen, Zustand mitnehmen, zweiten Durchgang behalten). Ein
+  moduliertes Filter hat keinen stationären Zustand, in den es einschwingen
+  könnte. Die Restabweichung ist `|pol|^frames` — bei 40 Hz und 800 000 Frames
+  unterläuft das auf null, also exakt und nicht bloss nah dran.
+- **Ein einziger Bypass, geprüft an den geschriebenen Bytes.** Der Unit-Test
+  zeigt, dass `apply` den Buffer nicht anfasst; der Regressionstest über die echte
+  Referenzdatei zeigt, dass die *Datei* Byte für Byte dieselbe ist — samt der
+  Gegenprobe, dass sie sich mit eingeschaltetem Charakter unterscheidet, sonst
+  würde der Test nur beweisen, dass `apply` nie erreicht wurde.
+- **Charakter-Flags implizieren `--tape`.** `--wow 0.5` ohne `--tape` wäre ein
+  stiller No-Op, und das ist schlimmer als eine Implikation.
   `auto` dithert nur, wenn die Bittiefe **sinkt**; bei gleicher oder steigender
   wäre das Rauschen reiner Verlust.
 
@@ -539,7 +583,8 @@ Ohne geteilten State sind es zwei Apps in einer APK statt einem Werkzeug.
     *dev*-dependency für die Gegenprobe in beide Richtungen. Null Runtime-Deps.
     Hat sich sofort bezahlt: das zu kurze RIFF-Size-Feld der Caustic-Exports
     fiel nur auf, weil das Parsen in eigener Hand lag.
-4. **Wow/Flutter-Defaults** und ob Charakter-Settings presetbar sind
+4. ~~Wow/Flutter-Defaults~~ → **0,3 % Wow / 0,15 % Flutter**, je zwei Sinusse;
+   Presetbarkeit noch offen (kommt mit `loopslcr.toml` in v0.4)
 5. **iOS** — lohnt sich das, oder decken CLI + Android den echten Workflow ab?
 
 ## 9. Name — entschieden

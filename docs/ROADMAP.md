@@ -3,10 +3,10 @@
 > Name fixed: **LOOP_SLCR**. Crates are `loopslcr-core` / `loopslcr-cli` /
 > `loopslcr-jni`, the binary is `loopslcr`.
 >
-> **Status:** M1 done, M2 (v0.2) done bar noise-shaped dither. The whole chain
-> runs: read → cut → foldback → fade → varispeed → normalize → dither → write,
-> with `--dry-run` verified over the 279-file archive.
-> Last updated 30.07.2026.
+> **Status:** M1 done, M2 (v0.2) done bar noise-shaped dither, M3 (v0.3) done.
+> The whole chain runs: read → cut → foldback → fade → varispeed → tape character
+> → normalize → dither → write, with `--dry-run` verified over the 279-file
+> archive. Last updated 30.07.2026.
 
 ## Vision
 
@@ -141,15 +141,62 @@ cents, and buys the same exactness for a loop that had none.
 
 ## v0.3 — Tape Character
 
-- [ ] `TapeParams` + single bypass switch
-- [ ] Wow & flutter LFO with **loop-periodic rate quantisation** (`k / loopDur`)
-- [ ] Zero-mean guarantee over the loop period (unit-tested: output length invariant)
-- [ ] Variable-rate resample path driven by the LFO
-- [ ] HF rolloff, cutoff scaling with speed
-- [ ] HF rolloff settling handled via double-pass warmup (keep second pass)
-- [ ] Head bump — low shelf / peak 40–100 Hz, centre scaling with speed
-- [ ] `--tape`, `--wow`, `--flutter`, `--hf-rolloff`
-- [ ] Regression test: character bypassed → output bit-identical to v0.2
+- [x] `TapeParams` + single bypass switch. Naming any amount implies `--tape`:
+      a flag that was clearly asked for must not be a silent no-op
+- [x] Wow & flutter with **loop-periodic rate quantisation** (`k / loopDur`)
+- [x] Zero-mean guarantee over the loop period — a theorem here rather than a
+      calibration, see below
+- [x] Variable-rate read path driven by the modulation, sharing the varispeed's
+      sinc kernel (`SincResampler::read`, which the live preview will want too)
+- [x] HF rolloff, cutoff scaling with speed, clamped below Nyquist
+- [x] HF rolloff settling handled via double-pass warmup (keep second pass)
+- [x] Head bump — peaking EQ at 40–100 Hz, Q 0.7, centre scaling with speed
+- [x] `--tape`, `--wow`, `--flutter`, `--hf-rolloff`, `--head-bump`
+- [x] Regression test: character bypassed → output bit-identical to v0.2, checked
+      on the **written bytes** of the real reference file, not just on the buffer
+
+**The design decision that made this possible: modulate position, not rate.**
+
+The wobble is a *displacement* of the read position, `p(j) = j + D(j)`, where `D`
+is a sum of sinusoids whose periods divide the loop exactly. Two things follow,
+neither of them approximate:
+
+- **The length is untouched.** The output index still advances by one per frame,
+  so there is nothing to round. A rate-modulated wobble would have to integrate
+  the rate and land wherever it lands.
+- **The seam stays continuous.** `D` is loop-periodic, so the position the next
+  repeat starts from is the position this one would have continued to.
+
+The rate deviation is then `D'(j)`, and the integral of the derivative of a
+periodic function over its period is exactly zero. The zero-mean guarantee is not
+tuned, it is structural. `D(0)` is deliberately *not* pinned to zero: forcing a
+node at the seam would put a fixed point in the modulation once per repeat, which
+is the tick this whole approach exists to avoid.
+
+Depth is specified as a **speed** deviation, the way a tape machine is, and the
+displacement follows as `A = depth · N / (2π k)`. So at equal depth a slow wobble
+displaces far more than a fast one — 0.3 % of wow on a 21-second loop is ±22
+frames, the same 0.3 % of flutter under one. That asymmetry is physical: it is
+why wow is heard as pitch movement and flutter as roughness.
+
+**Nothing here is random.** A random drift would either break byte-identical
+reproducibility or need a seed, and a seeded pseudo-random drift on a two-second
+loop is a fixed pattern anyway. Two sinusoids at unrelated rates already sound
+irregular over a loop.
+
+On the reference file at 90 BPM the quantisation grid is 0.047 Hz, so the
+requested rates land within 0.005 Hz of themselves:
+
+```
+  tape         wow 0.300 % at 0.703 + 1.922 Hz (15 + 41 cycles/loop), ±22.35 frames
+               flutter 0.150 % at 11.016 + 27.000 Hz (235 + 576 cycles/loop), ±0.73 frames
+               HF rolloff 6 dB/oct from 10485 Hz
+               head bump +2.0 dB at 52 Hz, Q 0.7
+```
+
+The rolloff and the bump have moved down with the speed — 12 kHz and 60 Hz at
+nominal, 10485 Hz and 52 Hz at 87.4 %. A tape played slower is duller as well as
+lower, and that is the same coefficient doing both.
 
 ---
 
@@ -241,10 +288,10 @@ cents, and buys the same exactness for a loop that had none.
 
 | Milestone | Content | Status |
 |---|---|---|
-| M1 | v0.1 Core + CLI, exact cut math, dry-run over the archive | **IN PROGRESS** — timing core done, audio I/O next |
-| M2 | v0.2 Varispeed, bit depth, dither, BPM tagging | TODO |
-| M3 | v0.3 Tape character with loop-periodic modulation | TODO |
-| M4 | v0.4 Batch processing, CLI feature-complete | TODO |
+| M1 | v0.1 Core + CLI, exact cut math, dry-run over the archive | **DONE** |
+| M2 | v0.2 Varispeed, bit depth, dither, BPM tagging | **DONE** bar noise-shaped dither |
+| M3 | v0.3 Tape character with loop-periodic modulation | **DONE** |
+| M4 | v0.4 Batch processing, CLI feature-complete | **IN PROGRESS** — next |
 | M5 | v1.0 Android APK, two tabs, tape-riding preview | TODO |
 | M6 | v1.1 Saturation (oversampling + ADAA) | TODO |
 | M7 | v2.0 Slice export, Elektron export, desktop GUI | TODO |

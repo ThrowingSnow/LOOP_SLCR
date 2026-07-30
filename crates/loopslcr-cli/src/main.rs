@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use loopslcr_core::analysis::{self, Peaks, Tail, Workflow, WorkflowGuess};
 use loopslcr_core::naming;
 use loopslcr_core::ops::resample::{Edge, Resampler, SincResampler};
-use loopslcr_core::ops::{cut, dither, foldback, gain, Dither, Fade, FadeShape};
+use loopslcr_core::ops::{cut, dither, foldback, gain, tape, Dither, Fade, FadeShape, TapeParams};
 use loopslcr_core::timing::{Align, BpmUnit, Grid, Ratio, Tempo, TimeSignature};
 use loopslcr_core::wav::{chunks::Chunks, write, BitDepth, Metadata, SampleFormat, Wav, WriteSpec};
 
@@ -22,6 +22,11 @@ struct Cli {
     command: Command,
 }
 
+/// The variants differ a lot in size, and deliberately so: `Cut` carries every
+/// flag of the pipeline. Boxing it to even the sizes out would add an
+/// indirection to a value that is built once at startup and destructured on the
+/// next line.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
     /// Show what a WAVE file contains: format, duration, declared tempo, tags.
@@ -137,6 +142,28 @@ enum Command {
         #[arg(long = "dither-seed", default_value_t = dither::DEFAULT_SEED)]
         dither_seed: u64,
 
+        /// Tape character: wow, flutter, head-gap HF loss, head bump. One
+        /// switch, so the clean path stays byte-identical when it is off.
+        #[arg(long)]
+        tape: bool,
+
+        /// Wow depth as peak speed deviation in percent. Implies --tape.
+        #[arg(long)]
+        wow: Option<f64>,
+
+        /// Flutter depth as peak speed deviation in percent. Implies --tape.
+        #[arg(long)]
+        flutter: Option<f64>,
+
+        /// Head-gap loss corner: `auto`, `off`, or a frequency in Hz at nominal
+        /// speed — it is scaled by the varispeed ratio. Implies --tape.
+        #[arg(long = "hf-rolloff")]
+        hf_rolloff: Option<String>,
+
+        /// Head bump height in dB, or `off`. Implies --tape.
+        #[arg(long = "head-bump")]
+        head_bump: Option<String>,
+
         /// Micro-fade length in milliseconds. Defaults to 0.5 ms on a straight
         /// cut and to none on a foldback, which is seamless already.
         #[arg(long)]
@@ -228,6 +255,60 @@ fn parse_pitch(text: &str) -> Result<Ratio, Box<dyn Error>> {
         Ratio::from_semitones(value)
     };
     Ok(ratio?)
+}
+
+/// Collects the character flags into one [`TapeParams`].
+///
+/// Naming any amount switches the character on. The alternative — requiring
+/// `--tape` alongside `--wow 0.5` — would make a flag that was clearly asked for
+/// do nothing at all, and a silent no-op is worse than an implication.
+fn resolve_tape(
+    tape: bool,
+    wow: Option<f64>,
+    flutter: Option<f64>,
+    hf_rolloff: &Option<String>,
+    head_bump: &Option<String>,
+) -> Result<TapeParams, Box<dyn Error>> {
+    let named = tape
+        || wow.is_some()
+        || flutter.is_some()
+        || hf_rolloff.is_some()
+        || head_bump.is_some();
+    let mut params = TapeParams {
+        enabled: named,
+        ..TapeParams::default()
+    };
+
+    for (name, value, target) in [
+        ("--wow", wow, &mut params.wow_percent),
+        ("--flutter", flutter, &mut params.flutter_percent),
+    ] {
+        if let Some(value) = value {
+            if !value.is_finite() || value < 0.0 {
+                return Err(format!("invalid {name} {value}: expected a percentage from 0 up").into());
+            }
+            *target = value;
+        }
+    }
+
+    if let Some(text) = hf_rolloff {
+        params.hf_rolloff_hz = parse_amount(text, "--hf-rolloff", tape::DEFAULT_HF_ROLLOFF_HZ)?;
+    }
+    if let Some(text) = head_bump {
+        params.head_bump_db = parse_amount(text, "--head-bump", tape::DEFAULT_HEAD_BUMP_DB)?;
+    }
+    Ok(params)
+}
+
+/// Parses `auto`, `off`, or a number, for the flags where zero means off.
+fn parse_amount(text: &str, flag: &str, default: f64) -> Result<f64, Box<dyn Error>> {
+    match text.trim() {
+        "auto" => Ok(default),
+        "off" | "none" | "no" => Ok(0.0),
+        number => number
+            .parse()
+            .map_err(|_| format!("invalid {flag} {text:?}: expected auto, off, or a number").into()),
+    }
 }
 
 /// Which of the two render shapes the source has.
@@ -333,6 +414,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             normalize,
             dither,
             dither_seed,
+            tape,
+            wow,
+            flutter,
+            hf_rolloff,
+            head_bump,
             fade,
             no_fade,
             dry_run,
@@ -358,6 +444,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             normalize,
             dither,
             dither_seed,
+            tape: resolve_tape(tape, wow, flutter, &hf_rolloff, &head_bump)?,
             fade,
             no_fade,
             dry_run,
@@ -407,6 +494,7 @@ struct CutArgs {
     normalize: bool,
     dither: DitherArg,
     dither_seed: u64,
+    tape: TapeParams,
     fade: Option<f64>,
     no_fade: bool,
     dry_run: bool,
@@ -626,6 +714,16 @@ fn run_cut(args: CutArgs) -> Result<String, Box<dyn Error>> {
         )?;
     }
 
+    // Character after the varispeed, because both filters scale their corner
+    // frequencies with the speed actually played — and because a filter can only
+    // be warmed up over a loop whose length has stopped changing.
+    let character = tape::apply(&mut cut_buffer, &args.tape, ratio);
+    if let Some(line) = describe_tape(&character) {
+        write!(s, "{line}")?;
+    } else if args.tape.enabled {
+        writeln!(s, "  tape         on, but every amount is zero — nothing applied")?;
+    }
+
     let mut peak = gain::Peak::measure(&cut_buffer);
     if args.normalize {
         if let Some(factor) = gain::normalize(&mut cut_buffer, gain::FULL_SCALE) {
@@ -829,6 +927,42 @@ fn naming_bars(args: &CutArgs, name: &str) -> Option<u64> {
     args.bars_from_name
         .then(|| naming::bars_from_name(name))
         .flatten()
+}
+
+/// Reports the character actually imposed, or `None` if none was.
+///
+/// The rates printed are the quantised ones, not the ones requested: the loop
+/// grid is what the modulation had to land on, and a report showing 0.7 Hz where
+/// 0.68 Hz was used would hide the one mechanism that keeps the loop exact.
+fn describe_tape(t: &tape::Tape) -> Option<String> {
+    if t.is_noop() {
+        return None;
+    }
+    let mut s = String::new();
+    let mut label = "  tape         ";
+
+    for (name, wobble) in [("wow", &t.wow), ("flutter", &t.flutter)] {
+        if let Some(w) = wobble {
+            let rates: Vec<String> = w.rates_hz.iter().map(|hz| format!("{hz:.3}")).collect();
+            let _ = writeln!(
+                s,
+                "{label}{name} {:.3} % at {} Hz ({} cycles/loop), ±{:.2} frames",
+                w.depth_percent,
+                rates.join(" + "),
+                w.cycles.iter().map(u64::to_string).collect::<Vec<_>>().join(" + "),
+                w.peak_frames
+            );
+            label = "               ";
+        }
+    }
+    if let Some(hz) = t.hf_rolloff_hz {
+        let _ = writeln!(s, "{label}HF rolloff 6 dB/oct from {hz:.0} Hz");
+        label = "               ";
+    }
+    if let Some((hz, db)) = t.head_bump {
+        let _ = writeln!(s, "{label}head bump {db:+.1} dB at {hz:.0} Hz, Q {}", tape::HEAD_BUMP_Q);
+    }
+    Some(s)
 }
 
 fn describe(w: Workflow) -> &'static str {

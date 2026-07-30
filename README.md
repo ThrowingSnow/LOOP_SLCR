@@ -1,8 +1,8 @@
 # LOOP_SLCR
 
-> **Status: v0.1 and v0.2 complete** bar noise-shaped dither. The whole chain
-> runs — read → cut → foldback → fade → varispeed → normalize → dither → write —
-> behind `loopslcr cut`. `--dry-run` over the 279-file archive processes 261 and
+> **Status: v0.1, v0.2 and v0.3 complete** bar noise-shaped dither. The whole
+> chain runs — read → cut → foldback → fade → varispeed → tape character →
+> normalize → dither → write — behind `loopslcr cut`. `--dry-run` over the 279-file archive processes 261 and
 > refuses 18 with a named reason. **No runtime dependencies** in the core;
 > `hound` and `rubato` are test-only second opinions.
 > See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the breakdown.
@@ -73,6 +73,25 @@ The ratio 90/103 is a fraction, so the new length is exact rather than rounded
 twice — and 8 bars at 90 BPM happens to be a whole 940 800 samples, leaving no
 residual at all. `--snap` on its own finds the nearest tempo where that is true.
 
+Tape character is one switch, and it costs the loop nothing:
+
+```console
+$ loopslcr cut "103 29Jul26 1Punkt1 Cstc.wav" --target-bpm 90 --tape --normalize
+  tape         wow 0.300 % at 0.703 + 1.922 Hz (15 + 41 cycles/loop), ±22.35 frames
+               flutter 0.150 % at 11.016 + 27.000 Hz (235 + 576 cycles/loop), ±0.73 frames
+               HF rolloff 6 dB/oct from 10485 Hz
+               head bump +2.0 dB at 52 Hz, Q 0.7
+  length       940800 vs 940800.0000 exact at 90 BPM — sample-exact
+```
+
+Still 940 800 samples. The wobble is a *displacement* of the read position whose
+period divides the loop, not a modulated rate, so the output index still advances
+one frame at a time and there is nothing to round; the rate deviation, being the
+derivative of a periodic function, integrates to exactly zero over the loop. The
+rates printed are the quantised ones — the grid here is 0.047 Hz, far finer than
+the ear. And the two filters have moved down with the speed, from 12 kHz and 60 Hz:
+a tape played slower is duller as well as lower.
+
 ---
 
 ## Two paths to a seamless loop
@@ -131,9 +150,11 @@ length = `round(bars · samplesPerBar)`) or **grid priority** (both markers on g
 - **Varispeed** — pure resampling (pitch and tempo move together, tape style), never
   a time-preserving pitch shift, which would smear exactly the seam this tool cleans
   up. Pitch-driven, BPM-driven, or snap to the nearest sample-exact BPM
-- **Tape character** — wow & flutter with loop-periodic modulation (LFO rates
-  quantised to `k / loopDuration`, zero-mean, so output length stays invariant),
-  HF rolloff, head bump — behind one bypass switch
+- **Tape character** — wow & flutter as a loop-periodic *displacement* of the read
+  position rather than a modulated rate, so the length is untouched and the seam
+  stays continuous by construction; plus HF rolloff and head bump, both scaling
+  their corner frequencies with playback speed. One bypass switch, and with it off
+  the output is byte-identical to the clean path
 - Bit depth selectable (16/24/32f) with TPDF dither
 - BPM declared four ways: filename template, `acid` chunk, `smpl` chunk, `LIST/INFO`
 - **BPM/time calculator** in the style of `toolstud.io/music/bpm.php`, extended with
@@ -178,9 +199,9 @@ archive of 279 loops. v1.0 adds a deliberately narrow JNI surface and a Compose 
 | Milestone | Content | |
 |---|---|---|
 | M1 | v0.1 core + CLI, exact cut math, dry-run over the archive | **done** |
-| M2 | v0.2 varispeed, bit depth, dither, BPM tagging | |
-| M3 | v0.3 tape character with loop-periodic modulation | |
-| M4 | v0.4 batch processing, CLI feature-complete | |
+| M2 | v0.2 varispeed, bit depth, dither, BPM tagging | **done** |
+| M3 | v0.3 tape character with loop-periodic modulation | **done** |
+| M4 | v0.4 batch processing, CLI feature-complete | next |
 | M5 | v1.0 Android APK, two tabs, tape-riding preview | |
 | M6 | v1.1 saturation (oversampling + ADAA) | |
 | M7 | v2.0 slice export, Elektron export, desktop GUI | |

@@ -90,6 +90,63 @@ impl SincResampler {
     pub fn with_edge(self, edge: Edge) -> Self {
         SincResampler { edge, ..self }
     }
+
+    /// Kernel geometry for a given rate: cutoff, half-width, and integer reach.
+    ///
+    /// `step` is input samples advanced per output sample. Above 1 the output is
+    /// sparser than the input — pitching up — and needs the lowpass.
+    fn kernel(&self, step: f64) -> (f64, f64, isize) {
+        let cutoff = 0.5 / step.max(1.0);
+        // Half-width in input samples. The kernel stretches as the cutoff
+        // narrows so the zero-crossing count stays put.
+        let half = self.zero_crossings as f64 / (2.0 * cutoff);
+        (cutoff, half, half.ceil() as isize)
+    }
+
+    /// One band-limited read of `source` at fractional position `centre`.
+    ///
+    /// Exposed because two callers drive the position themselves rather than
+    /// stepping it uniformly: the tape wobble, whose read position wanders by a
+    /// fraction of a sample, and eventually the live preview. `step` describes
+    /// the *local* rate, and only sets how much anti-aliasing the read needs —
+    /// pass 1.0 when the position merely wobbles around unity.
+    pub fn read(&self, source: &[f64], centre: f64, step: f64) -> f64 {
+        let (cutoff, half, reach) = self.kernel(step);
+        self.read_with(source, centre, cutoff, half, reach)
+    }
+
+    /// The inner loop, with the kernel geometry already computed.
+    ///
+    /// Split out so a run over thousands of samples at one rate pays for
+    /// [`Self::kernel`] once instead of once per sample.
+    fn read_with(&self, source: &[f64], centre: f64, cutoff: f64, half: f64, reach: isize) -> f64 {
+        let first = centre.floor() as isize - reach;
+
+        let mut sum = 0.0;
+        let mut weight = 0.0;
+        for i in first..=(first + 2 * reach) {
+            let offset = centre - i as f64;
+            if offset.abs() > half {
+                continue;
+            }
+            let tap = 2.0 * cutoff * sinc(2.0 * cutoff * offset) * blackman_harris(offset / half);
+            // Accumulate the tap weight even where the sample is taken as zero,
+            // or the normalisation below would boost the edges.
+            weight += tap;
+            if let Some(x) = pick(source, i, self.edge) {
+                sum += tap * x;
+            }
+        }
+
+        // Normalise to unity DC gain. Windowing and a fractional centre leave
+        // the tap sum a little off 1, which unaddressed shows up as a faint
+        // ripple across the whole file.
+        if weight.abs() > 1e-12 {
+            sum / weight
+        } else {
+            0.0
+        }
+    }
 }
 
 impl Resampler for SincResampler {
@@ -108,44 +165,14 @@ impl Resampler for SincResampler {
             return Err(Error::EmptyResampleOutput);
         }
 
-        // Input samples advanced per output sample. Above 1 the output is
-        // sparser than the input — pitching up — and needs the lowpass.
         let step = source_frames as f64 / target_frames as f64;
-        let cutoff = 0.5 / step.max(1.0);
-
-        // Half-width in input samples. The kernel stretches as the cutoff
-        // narrows so the zero-crossing count stays put.
-        let half = self.zero_crossings as f64 / (2.0 * cutoff);
-        let reach = half.ceil() as isize;
+        let (cutoff, half, reach) = self.kernel(step);
 
         let mut out = vec![vec![0.0f64; target_frames]; input.channel_count()];
         for (channel, target) in out.iter_mut().enumerate() {
             let source = input.channel(channel);
             for (j, sample) in target.iter_mut().enumerate() {
-                let centre = j as f64 * step;
-                let first = centre.floor() as isize - reach;
-
-                let mut sum = 0.0;
-                let mut weight = 0.0;
-                for i in first..=(first + 2 * reach) {
-                    let offset = centre - i as f64;
-                    if offset.abs() > half {
-                        continue;
-                    }
-                    let tap = 2.0 * cutoff * sinc(2.0 * cutoff * offset)
-                        * blackman_harris(offset / half);
-                    // Accumulate the tap weight even where the sample is taken
-                    // as zero, or the normalisation below would boost the edges.
-                    weight += tap;
-                    if let Some(x) = pick(source, i, self.edge) {
-                        sum += tap * x;
-                    }
-                }
-
-                // Normalise to unity DC gain. Windowing and a fractional centre
-                // leave the tap sum a little off 1, which unaddressed shows up
-                // as a faint ripple across the whole file.
-                *sample = if weight.abs() > 1e-12 { sum / weight } else { 0.0 };
+                *sample = self.read_with(source, j as f64 * step, cutoff, half, reach);
             }
         }
 
