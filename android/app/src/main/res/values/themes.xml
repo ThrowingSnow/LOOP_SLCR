@@ -1,0 +1,9 @@
+<resources>
+    <!-- Compose draws everything; this only has to keep the system from drawing
+         a light-mode action bar for a moment before it does. -->
+    <style name="Theme.LoopSlcr" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FF101014</item>
+        <item name="android:statusBarColor">#FF101014</item>
+        <item name="android:navigationBarColor">#FF101014</item>
+    </style>
+</resources>

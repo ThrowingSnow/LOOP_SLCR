@@ -7,7 +7,9 @@
 > The whole chain runs:
 > read → cut → foldback → fade → varispeed → tape character → normalize → dither
 > → write, and `loopslcr batch` puts the 279-file archive through it in 1.3
-> seconds. Next is M5, the Android APK. Last updated 30.07.2026.
+> seconds. M5 is under way: the Android toolchain is installed, `loopslcr-jni`
+> is done bar the preview engine, and the APK builds, installs and runs — the
+> cutter works offline end to end. Last updated 30.07.2026.
 
 ## Vision
 
@@ -322,29 +324,35 @@ worth exactly as much as its regression check.
 
 ## v1.0 — Android APK
 
-> **Blocked on tooling, not on design.** This machine has a JDK but no Android
-> SDK, no NDK, no `cargo-ndk` and no `aarch64-linux-android` Rust target, so
-> nothing here can be built or verified yet. `loopslcr-jni` is the next piece
-> that *can* be: the `jni` crate builds for the host, so the marshalling and the
-> preview handle lifecycle can be tested against a real JVM before any of it
-> meets a phone.
+> **The toolchain is installed and the APK builds, installs and runs.** See
+> `docs/TOOLCHAIN.md`. What is done is the whole offline path: pick a file,
+> analyse it, see it, set the cut, export it. What is not is the preview engine —
+> the only part that needs an audio thread — and the calculator tab.
 
-- [ ] `loopslcr-jni` cdylib, `cargo-ndk` integration
-- [ ] Gradle ↔ cargo build wiring
-- [ ] JNI surface: `analyze`, `process`, `previewCreate/Read/SetRatio/Seek/Destroy`
-- [ ] Direct `ByteBuffer` transfer for PCM (no copies)
-- [ ] SAF file picking (`ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT`), no broad permissions
-- [ ] Compose UI shell, two tabs
+- [x] `loopslcr-jni` cdylib, `cargo-ndk` integration
+- [x] Gradle ↔ cargo build wiring (`:app:cargoNdk`, inputs declared)
+- [x] JNI surface: `analyze`, `plan`, `process`, `peaks`, `version`
+- [ ] JNI surface: `previewCreate/Read/SetRatio/Seek/Destroy`
+- [x] Direct `ByteBuffer` transfer for PCM (no copies)
+- [x] Panic guard at every entry point, proved from Java on host *and* device
+- [x] SAF file picking (`ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT`), no broad permissions
+- [x] Compose UI shell
+- [ ] Two tabs (only CUTTER exists; CALCULATOR needs a JNI surface of its own,
+      because computing the grid in Kotlin would be a second source of truth)
 - [ ] **Tab: CUTTER**
-  - [ ] Waveform view from Rust peak buckets
-  - [ ] Draggable / numeric cut markers, live overlay
-  - [ ] BPM, signature, BPM unit, skip bars, loop bars
+  - [x] Waveform view from Rust peak buckets
+  - [x] Cut region shown as an overlay with markers
+  - [ ] Draggable markers (currently the region follows the settings, not a drag)
+  - [x] Loop bars, skip bars, workflow selector
+  - [ ] BPM and signature overrides, BPM unit
   - [ ] Tail mode selector with auto-detect suggestion
   - [ ] **Grid vs. loop priority — visible toggle**
-  - [ ] Bipolar varispeed control, detent at 0
+  - [x] Bipolar varispeed control, detent at 0
+  - [x] Target-BPM entry as the other way to ask for the same thing
   - [ ] Live readout in all three units (st/cents, % speed, BPM)
-  - [ ] Tape character panel + bypass
-  - [ ] Export sheet: bit depth, dither, tags, filename template
+  - [x] Tape character panel + bypass
+  - [x] Bit depth, normalize, snap, short-loop override
+  - [ ] Export sheet: dither mode, tags, filename template
 - [ ] **Tab: CALCULATOR**
   - [ ] Beats/min, beats/bar, bars/min, beat length, bar length, Hz
   - [ ] Fraction table 1/16 … 16/16: percent, ms, Hz, **samples**
@@ -357,7 +365,8 @@ worth exactly as much as its regression check.
   - [ ] Ratio glide via one-pole smoother in the audio thread (tape inertia)
   - [ ] Lock-free ratio handoff (atomic)
   - [ ] Seamless loop playback across the seam
-- [ ] Dark theme
+- [x] Dark theme
+- [x] Instrumented tests: the engine on a real Android runtime, the screen rendered
 - [ ] GitHub Actions: signed release APK on tag push
 
 ---
@@ -401,7 +410,7 @@ worth exactly as much as its regression check.
 | M2 | v0.2 Varispeed, bit depth, dither, BPM tagging | **DONE** bar noise-shaped dither |
 | M3 | v0.3 Tape character with loop-periodic modulation | **DONE** |
 | M4 | v0.4 Batch processing, CLI feature-complete | **DONE** |
-| M5 | v1.0 Android APK, two tabs, tape-riding preview | **IN PROGRESS** — next |
+| M5 | v1.0 Android APK, two tabs, tape-riding preview | **IN PROGRESS** — cutter runs; preview engine and calculator open |
 | M6 | v1.1 Saturation (oversampling + ADAA) | TODO |
 | M7 | v2.0 Slice export, Elektron export, desktop GUI | TODO |
 
@@ -411,7 +420,8 @@ worth exactly as much as its regression check.
 
 - ~~Project name~~ → **LOOP_SLCR**, crates `loopslcr-*`, binary `loopslcr`
 - Micro-fades: default on (0.5 ms) or default off?
-- Peak buckets: computed in Rust and passed over JNI, or computed in Kotlin?
+- ~~Peak buckets: Rust over JNI, or Kotlin?~~ → **Rust**, as one flat `float[]`
+  interleaved in drawing order. Measured once per file; a resize only redraws.
 - WAV reading: keep `hound`, or hand-rolled for zero dependency?
   (blocks the next task — the writer has to be hand-rolled either way for
   `acid`/`smpl`, so reading it too costs perhaps 200 lines and drops the

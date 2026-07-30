@@ -785,3 +785,43 @@ Ein Sweep mit `loopslcr info` über alle 279 Einträge (Details siehe
 - **CLI panickte bei `| head`.** Rust ignoriert SIGPIPE per Default, also
   knallt jedes `println!` in eine geschlossene Pipe. Behoben: Ausgabe geht
   über einen Puffer, `BrokenPipe` beendet sauber mit Exit-Code 0.
+
+---
+
+## 12. Android — was beim Bauen entschieden wurde
+
+- **Der Emulator hat die zweite ABI erzwungen.** Geplant war `arm64-v8a` allein.
+  Ohne `x86_64` läuft die App aber auf keinem Emulator, und damit lässt sich das
+  APK nur von Hand auf einem Gerät prüfen — also praktisch gar nicht. Ein halbes
+  MB für automatisch prüfbare Builds ist keine Abwägung. `/dev/kvm` ist auf
+  dieser Maschine für alle schreibbar, der Emulator läuft also beschleunigt,
+  ohne jemanden in die `kvm`-Gruppe zu nehmen.
+- **`Native.java` liegt in der App, nicht im Crate.** Sie ist die Deklaration,
+  auf die die Symbolnamen in `lib.rs` passen müssen. Eine zweite Kopie im
+  `tests/java` des Crates wäre eine zweite Sache, die stimmen muss — und die
+  driftende wäre die, die kein Test kompiliert. Der JVM-Brückentest übersetzt
+  jetzt die Datei aus `android/`.
+- **AGP 8.13.2 und AndroidX bewusst eine Generation zurück.** Die neuesten
+  AndroidX-Releases verlangen AGP 9 und `compileSdk` 37. Das hieße neuer
+  Gradle-Major, neue Plattform, neue Plugin-APIs — für nichts, was diese App
+  benutzt. Die gepinnten Versionen sind die letzten, die gegen `compileSdk` 36
+  bauen.
+- **`ndkVersion` im `android {}`-Block ist nicht kosmetisch.** Ohne sie findet
+  AGP `llvm-strip` nicht, gibt das Strippen auf und sagt es nur in einer
+  Warnung. Die Bibliothek war dadurch 758 KB statt 534 KB.
+- **Kein Default wird nach Kotlin geschrieben.** `Settings.toJson()` lässt jedes
+  Feld weg, das auf seinem Default steht. Die native Seite weiß bereits, was ein
+  fehlendes Feld bedeutet; es mitzusenden würde die Kotlin-Klasse zu einem
+  zweiten Ort machen, an dem Defaults stehen.
+- **`plan` läuft die ganze Pipeline.** Es resampelt die Datei, um zu sagen, was
+  herauskäme — also darf es nicht pro Pixel eines Sliders laufen. 250 ms Ruhe
+  vor dem Neurechnen sind der Unterschied zwischen einer UI, die antwortet, und
+  einer, die stockt.
+- **Detent bei 0 im Varispeed.** Ohne ihn hinterlässt jede Fingerbewegung ein
+  Verhältnis von 1.003: kostet ein Resampling und bringt nichts.
+- **Der Panik-Test wurde auf Android wiederholt.** Auf dem Host war er schon
+  bewiesen, aber Android hat eine andere Runtime und einen anderen Unwinder —
+  und dort wird die Zusage tatsächlich gebraucht.
+- **Der Instrumented-Test prüft auch Invariante 4 auf dem Gerät:** zweimal
+  dieselben Einstellungen, bitgleiche Bytes. Reproduzierbarkeit, die nur auf der
+  Maschine gilt, die sie gemessen hat, ist keine.

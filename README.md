@@ -221,6 +221,28 @@ No multi-track, no mixer, no FX rendering, no codec zoo. Minimal means minimal.
 
 ---
 
+## Android
+
+The APK builds, installs and runs. The cutter works end to end offline: pick a
+WAVE file through the Storage Access Framework, see it as a waveform with the
+cut region marked, set bars, skip, workflow, varispeed, tape character and bit
+depth, watch the dry run update as you go, and export.
+
+No permissions are asked for. The file arrives because the user handed it over,
+and nothing else on the device is readable.
+
+All of the audio is the same Rust core the CLI uses, reached through a JNI
+surface of five calls. Nothing about timing, cutting or resampling is
+reimplemented in Kotlin — the UI decides what to ask for and shows what came
+back, and that is all it does.
+
+Still to come: the preview engine (`AudioTrack` streaming from a variable-rate
+resampler, so the varispeed can be ridden by ear) and the calculator tab.
+
+Build and test it with [`docs/TOOLCHAIN.md`](docs/TOOLCHAIN.md).
+
+---
+
 ## Layout
 
 ```
@@ -246,7 +268,7 @@ archive of 279 loops. v1.0 adds a deliberately narrow JNI surface and a Compose 
 | M2 | v0.2 varispeed, bit depth, dither, BPM tagging | **done** |
 | M3 | v0.3 tape character with loop-periodic modulation | **done** |
 | M4 | v0.4 batch processing, CLI feature-complete | **done** |
-| M5 | v1.0 Android APK, two tabs, tape-riding preview | next |
+| M5 | v1.0 Android APK, two tabs, tape-riding preview | in progress |
 | M6 | v1.1 saturation (oversampling + ADAA) | |
 | M7 | v2.0 slice export, Elektron export, desktop GUI | |
 
@@ -262,12 +284,15 @@ Full detail in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Version-by-version task lists, milestones, exit criteria |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Design principles, module tree, core types, signal flow, key algorithms, JNI boundary, threading, testing strategy, invariants |
 | [`docs/CONTEXT.md`](docs/CONTEXT.md) | Session handover notes (German), the raw thinking behind the above |
+| [`docs/TOOLCHAIN.md`](docs/TOOLCHAIN.md) | The Android toolchain: exact versions, why each, how to build and test the APK |
 
 ---
 
 ## Open questions
 
-- Peak buckets: computed in Rust and passed over JNI, or computed in Kotlin?
+- Should the calculator tab get its own JNI surface, or share `analyze`?
+  (computing the grid in Kotlin is not an option — it would be a second source
+  of truth for the one thing this tool exists to get right)
 - Wow/flutter default depths, and whether character settings are presetable
 - iOS: worth it, or do CLI + Android cover the real workflow?
 

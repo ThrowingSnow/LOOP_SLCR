@@ -92,11 +92,20 @@ fn the_bridge_works_from_a_real_jvm() {
     std::fs::create_dir_all(&scratch).expect("could not make a scratch directory");
     let wav = wav_file(&scratch, 8);
 
+    // `Native.java` is compiled from where the app keeps it, not from a copy
+    // here. It is the declaration the symbol names in `lib.rs` have to match, so
+    // a second copy would be a second thing to keep right — and the one that
+    // drifted would be the one no test compiled.
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("no workspace root");
+    let declaration = workspace.join("android/app/src/main/java/org/loopslcr/Native.java");
     let sources = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/java");
     let compile = Command::new(&javac)
         .arg("-d")
         .arg(&scratch)
-        .arg(sources.join("org/loopslcr/Native.java"))
+        .arg(&declaration)
         .arg(sources.join("org/loopslcr/BridgeTest.java"))
         .output()
         .expect("javac did not run");

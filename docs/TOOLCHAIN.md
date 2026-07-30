@@ -17,22 +17,76 @@ set -gx PATH $JAVA_HOME/bin $ANDROID_HOME/cmdline-tools/latest/bin $ANDROID_HOME
 | Platform | android-36 | `~/Android/Sdk/platforms` |
 | Build-tools | 36.0.0 | `~/Android/Sdk/build-tools` |
 | NDK | 28.2.13676358 (r28c) | `~/Android/Sdk/ndk` |
-| Rust target | `aarch64-linux-android` | rustup |
+| Emulator | 37.1.11 | `~/Android/Sdk/emulator` |
+| System image | android-36 `default;x86_64` | `~/Android/Sdk/system-images` |
+| Gradle | 8.14.5 | `~/opt/gradle-8.14.5`, then the wrapper |
+| Rust targets | `aarch64-linux-android`, `x86_64-linux-android` | rustup |
 | `cargo-ndk` | 4.1.2 | `~/.cargo/bin` |
 
-About 2.7 GB of SDK plus 200 MB of JDK.
+About 6 GB in total: SDK, NDK, emulator and system image, plus the JDK and
+Gradle. Only the wrapper is committed — `android/gradlew` downloads Gradle
+itself, so the copy in `~/opt` is just what generated it.
 
 **JDK 21, not 26.** The system JDK is 26 and the Android Gradle Plugin does not
 run on it. 21 is the current LTS the Android tooling targets, so it is installed
 alongside rather than replacing anything — `JAVA_HOME` decides which one is used
 and the system one is left as it was.
 
-**API 26 (Android 8) as the floor, `arm64-v8a` only.** 26 covers essentially
-every device still running, and one ABI keeps the APK small and the build short.
-Adding `armeabi-v7a` and `x86_64` later is one flag; nothing in the code assumes
-a single architecture.
+**AGP 8.13.2, and the AndroidX versions pinned to match it.** The newest
+AndroidX releases require AGP 9 and `compileSdk` 37; moving to those would mean
+a new Gradle major, a new platform and a new set of plugin APIs, all to gain
+nothing this app uses. The versions in `gradle/libs.versions.toml` are the last
+ones that build against `compileSdk` 36 — chosen deliberately, not left behind.
 
-## Building the native library
+**API 26 (Android 8) as the floor.** 26 covers essentially every device still
+running.
+
+**Two ABIs: `arm64-v8a` and `x86_64`.** The first is every phone worth
+targeting. The second exists so the app can run on an emulator — without it the
+only way to test the APK is by hand on a device, which is to say not routinely.
+Half a megabyte for a build that can be verified automatically is not a trade
+worth thinking about. `armeabi-v7a` is one more entry in the same list;
+nothing in the code assumes an architecture.
+
+## Building the app
+
+```console
+$ cd android
+$ ./gradlew :app:assembleDebug
+```
+
+`:app:cargoNdk` runs first and cross-compiles the library into
+`app/build/rustJniLibs/<abi>/`, which is on `jniLibs.srcDirs`. Its inputs are
+declared, so a rebuild that only touched Kotlin skips it entirely.
+
+Always `--release` for the Rust side, even in a debug APK: a debug build of the
+resampler is not slow in the ordinary sense, it is unusable.
+
+## Testing on a device or emulator
+
+```console
+$ ~/Android/Sdk/emulator/emulator -avd loopslcr -no-window -no-audio -gpu swiftshader_indirect &
+$ cd android && ./gradlew :app:connectedDebugAndroidTest
+```
+
+The AVD was made with:
+
+```console
+$ avdmanager create avd -n loopslcr -k "system-images;android-36;default;x86_64" -d pixel_6
+```
+
+`/dev/kvm` on this machine is world-writable, so the emulator runs accelerated
+without adding anyone to the `kvm` group.
+
+`app/src/androidTest` runs the whole engine on the device — analyse, plan,
+process, peaks, reproducibility, the panic guard — and renders the cutter
+screen, writing a screenshot to the app's `filesDir`:
+
+```console
+$ adb exec-out run-as org.loopslcr.app cat files/cutter.png > cutter.png
+```
+
+## Building the native library on its own
 
 ```console
 $ cargo ndk -t arm64-v8a --platform 26 build --release -p loopslcr-jni

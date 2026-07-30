@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A waveform with a cut through it. Vector rather than a set of PNGs: one
+     file, no density buckets, and it stays sharp on whatever the device is. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:translateX="0" android:translateY="0">
+        <path
+            android:fillColor="#FF6B4A"
+            android:pathData="M28,38h4v32h-4z M36,30h4v48h-4z M44,44h4v20h-4z M52,26h4v56h-4z M60,40h4v28h-4z M68,34h4v40h-4z M76,46h4v16h-4z" />
+        <path
+            android:fillColor="#F2F2F2"
+            android:pathData="M53.2,18h1.6v72h-1.6z" />
+    </group>
+</vector>
