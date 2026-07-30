@@ -57,4 +57,20 @@ pub enum Error {
 
     #[error("source holds {have} frames but the loop needs {need}: too short to fold")]
     SourceShorterThanLoop { have: usize, need: usize },
+
+    #[error("no tempo known — pass --bpm (no acid chunk, none in the name)")]
+    NoTempo,
+
+    #[error("cannot tell how long the loop is — pass --bars")]
+    NoLoopLength,
+
+    #[error("a loop of {0} frames is longer than this machine can index")]
+    LoopTooLong(u64),
+
+    #[error("no sample-exact tempo within ±{window} BPM of {landing} for {bars} bars")]
+    NoSampleExactTempo {
+        landing: String,
+        window: u32,
+        bars: u64,
+    },
 }

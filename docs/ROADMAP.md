@@ -291,7 +291,43 @@ output refused to overwrite the first and one loop went missing. 260 files out o
 
 ---
 
+## v0.5 — One pipeline, two front ends
+
+Not a planned milestone; it became one the moment the Android app stopped being
+hypothetical. The cut used to live in the CLI's `run_cut`, interleaved with the
+lines it printed, and an app that reimplemented it would have been a second set
+of answers to *which tempo, which loop length, which shape, fade or not*. The
+two would have disagreed the first time either was touched.
+
+- [x] `core::pipeline` — `Params` in, `Outcome` out, no filesystem, no printing
+- [x] `Outcome` records every decision as data: tempo and its source, bars and
+      theirs, the detected shape *and* the chosen one, region, `short_by`, which
+      path ran, fade, ratio, resulting tempo, tape report, normalize factor,
+      dither mode, peak
+- [x] The CLI became a renderer: read the file, call the pipeline, format, write
+- [x] `Tempo::from_f32` — an `acid` chunk saying 103.5 becomes the exact fraction
+      207/2 via its decimal spelling, not the nearest binary approximation
+
+**The pipeline does not refuse a short loop.** It records `short_by` and the
+caller decides: the CLI refuses on a real run and reports on a dry one, and a UI
+would want to grey out a button rather than raise an error. Deciding in the core
+would make one of those impossible.
+
+**Verified by byte-identity, not by inspection.** After the refactor the batch
+over the archive produced **261 byte-identical files and a byte-identical
+report**. A refactor of the one thing this program exists to get exactly right is
+worth exactly as much as its regression check.
+
+---
+
 ## v1.0 — Android APK
+
+> **Blocked on tooling, not on design.** This machine has a JDK but no Android
+> SDK, no NDK, no `cargo-ndk` and no `aarch64-linux-android` Rust target, so
+> nothing here can be built or verified yet. `loopslcr-jni` is the next piece
+> that *can* be: the `jni` crate builds for the host, so the marshalling and the
+> preview handle lifecycle can be tested against a real JVM before any of it
+> meets a phone.
 
 - [ ] `loopslcr-jni` cdylib, `cargo-ndk` integration
 - [ ] Gradle ↔ cargo build wiring

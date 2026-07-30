@@ -9,14 +9,13 @@ use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::str::FromStr;
 
 use batch::BatchArgs;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use loopslcr_core::analysis::{self, Peaks, Tail, Workflow, WorkflowGuess};
+use loopslcr_core::analysis::{Peaks, Tail, Workflow, WorkflowGuess};
 use loopslcr_core::naming;
-use loopslcr_core::ops::resample::{Edge, Resampler, SincResampler};
-use loopslcr_core::ops::{cut, dither, foldback, gain, tape, Dither, Fade, FadeShape, TapeParams};
+use loopslcr_core::ops::{dither, tape, TapeParams};
+use loopslcr_core::pipeline;
 use loopslcr_core::timing::{Align, BpmUnit, Grid, Ratio, Tempo, TimeSignature};
 use loopslcr_core::wav::{chunks::Chunks, write, BitDepth, Metadata, SampleFormat, Wav, WriteSpec};
 
@@ -395,6 +394,27 @@ enum AlignArg {
     Grid,
 }
 
+impl From<PathArg> for Option<Workflow> {
+    fn from(p: PathArg) -> Option<Workflow> {
+        match p {
+            PathArg::Auto => None,
+            PathArg::A => Some(Workflow::WarmupRender),
+            PathArg::B => Some(Workflow::TailFoldback),
+        }
+    }
+}
+
+impl From<DitherArg> for pipeline::DitherPolicy {
+    fn from(d: DitherArg) -> pipeline::DitherPolicy {
+        match d {
+            DitherArg::Auto => pipeline::DitherPolicy::Auto,
+            DitherArg::On => pipeline::DitherPolicy::Flat,
+            DitherArg::Shaped => pipeline::DitherPolicy::Shaped,
+            DitherArg::Off => pipeline::DitherPolicy::Off,
+        }
+    }
+}
+
 impl From<AlignArg> for Align {
     fn from(a: AlignArg) -> Align {
         match a {
@@ -595,32 +615,18 @@ fn run(cli: Cli, preset_note: Option<String>) -> Result<Report, Box<dyn Error>> 
     })
 }
 
-/// The cutting pipeline's settings, with every flag that needs parsing already
-/// resolved — so the per-file work does no argument validation at all and a bad
-/// `--pitch` fails once, before the first file is touched, rather than 279 times.
+/// The resolved flags: the pipeline's own parameters, plus the three decisions
+/// that belong to a command line rather than to a cut.
+///
+/// Resolved once, before the first file is touched, so a bad `--pitch` fails
+/// once rather than 279 times.
 struct Settings {
-    bpm: Option<Tempo>,
-    bpm_from_name: bool,
-    bars: Option<u64>,
-    bars_from_name: bool,
-    skip: Option<u64>,
-    sig: TimeSignature,
-    bpm_unit: BpmUnit,
-    align: Align,
-    workflow: PathArg,
-    ratio: Option<Ratio>,
-    target_bpm: Option<Tempo>,
-    snap: bool,
-    snap_window: u32,
-    depth: BitDepth,
-    normalize: bool,
-    dither: DitherArg,
-    dither_seed: u64,
-    tape: TapeParams,
-    fade: Option<f64>,
-    no_fade: bool,
+    params: pipeline::Params,
+    /// Report and write nothing.
     dry_run: bool,
+    /// Accept a loop the source is too short to fill.
     allow_short: bool,
+    /// Overwrite an existing output file.
     force: bool,
 }
 
@@ -628,32 +634,34 @@ impl CutFlags {
     /// Validates and parses everything that can fail, once.
     fn resolve(&self) -> Result<Settings, Box<dyn Error>> {
         Ok(Settings {
-            bpm: self.bpm,
-            bpm_from_name: self.bpm_from_name,
-            bars: self.bars,
-            bars_from_name: self.bars_from_name,
-            skip: self.skip,
-            sig: self.sig,
-            bpm_unit: self.bpm_unit,
-            align: self.align.into(),
-            workflow: self.workflow,
-            ratio: self.pitch.as_deref().map(parse_pitch).transpose()?,
-            target_bpm: self.target_bpm,
-            snap: self.snap,
-            snap_window: self.snap_window,
-            depth: self.depth,
-            normalize: self.normalize,
-            dither: self.dither,
-            dither_seed: self.dither_seed,
-            tape: resolve_tape(
-                self.tape,
-                self.wow,
-                self.flutter,
-                &self.hf_rolloff,
-                &self.head_bump,
-            )?,
-            fade: self.fade,
-            no_fade: self.no_fade,
+            params: pipeline::Params {
+                bpm: self.bpm,
+                prefer_name_tempo: self.bpm_from_name,
+                bars: self.bars,
+                prefer_name_bars: self.bars_from_name,
+                skip: self.skip,
+                sig: self.sig,
+                bpm_unit: self.bpm_unit,
+                align: self.align.into(),
+                workflow: self.workflow.into(),
+                ratio: self.pitch.as_deref().map(parse_pitch).transpose()?,
+                target_bpm: self.target_bpm,
+                snap: self.snap,
+                snap_window: self.snap_window,
+                depth: self.depth,
+                normalize: self.normalize,
+                dither: self.dither.into(),
+                dither_seed: self.dither_seed,
+                tape: resolve_tape(
+                    self.tape,
+                    self.wow,
+                    self.flutter,
+                    &self.hf_rolloff,
+                    &self.head_bump,
+                )?,
+                fade_ms: self.fade,
+                no_fade: self.no_fade,
+            },
             dry_run: self.dry_run,
             allow_short: self.allow_short,
             force: self.force,
@@ -662,6 +670,11 @@ impl CutFlags {
 }
 
 /// Cuts a loop and writes it, or says what it would have written.
+///
+/// The cutting itself is [`pipeline::run`]; everything here is reading the file,
+/// turning the outcome into lines, and deciding what to do about it. That split
+/// is what lets a second front end exist without a second set of answers to
+/// which tempo, which loop length, which shape.
 ///
 /// Everything that could make the result silently wrong is a hard error here
 /// rather than a warning: a loop that is short drifts, and an output that
@@ -672,245 +685,126 @@ fn run_cut(file: &Path, out: Out, args: &Settings) -> Result<Cut, Box<dyn Error>
 
     let bytes = std::fs::read(file).map_err(|e| named(e.to_string()))?;
     let wav = Wav::parse(&bytes).map_err(|e| named(e.to_string()))?;
-    let format = wav.format();
-
     let name = file.file_name().unwrap_or_default().to_string_lossy();
-    let from_name = naming::tempo_from_name(&name);
-    let from_acid = wav
-        .tags()
-        .declared_tempo()
-        .and_then(|t| Tempo::from_str(&format!("{t}")).ok());
 
-    // The flag wins, then whichever of the two sources `--bpm-from-name`
-    // prefers. For this archive the filename is the better source — not one
-    // file in it carries an `acid` chunk — but a file that does declare one
-    // should be believed over a name that might just contain a date.
-    let candidates: [(Option<Tempo>, &str); 3] = if args.bpm_from_name {
-        [
-            (args.bpm, "given"),
-            (from_name, "from filename"),
-            (from_acid, "from acid chunk"),
-        ]
-    } else {
-        [
-            (args.bpm, "given"),
-            (from_acid, "from acid chunk"),
-            (from_name, "from filename"),
-        ]
-    };
-    let (tempo, tempo_source) = candidates
-        .into_iter()
-        .find_map(|(t, source)| t.map(|t| (t, source)))
-        .ok_or_else(|| {
-            named("no tempo known — pass --bpm (no acid chunk, none in the name)".to_string())
-        })?;
-
-    let grid = Grid::new(tempo.with_unit(args.bpm_unit), args.sig, format.sample_rate);
-
-    // Loop length: the flag wins, then the filename if asked for, then the
-    // file's own duration. No fixed default — `8` is right for the reference
-    // render and wrong for four fifths of the archive.
-    let from_length = analysis::guess_loop_bars(&grid, wav.frames());
-    let (bars, bars_source) = match (args.bars, naming_bars(args, &name), from_length) {
-        (Some(b), _, _) => (b, BarsSource::Given),
-        (None, Some(b), _) => (b, BarsSource::Filename),
-        (None, None, Some(g)) => (g.bars, BarsSource::FileLength),
-        (None, None, None) => {
-            return Err(named(
-                "cannot tell how long the loop is — pass --bars".to_string(),
-            )
-            .into())
-        }
-    };
-
-    let source = wav.decode().map_err(|e| named(e.to_string()))?;
-    let tail = Tail::measure_default(&source);
-    let guess = WorkflowGuess::detect(&grid, source.frames(), tail.audible_end, bars);
-
-    // When the loop length came from the file's own duration, the shape comes
-    // from the same reading. Asking `WorkflowGuess::detect` again would let the
-    // two disagree — and they do: a file read as one 4-bar loop plus a tail
-    // comes back `Unclear` from `detect`, whose skip of one whole loop then puts
-    // the region past the end of a file that was only ever one loop long.
-    let detected = match (bars_source, from_length) {
-        (BarsSource::FileLength, Some(g)) => g.workflow,
-        _ => guess.workflow,
-    };
-
-    // `--path` overrides the detected shape; `--skip` overrides both.
-    let chosen = match args.workflow {
-        PathArg::A => Workflow::WarmupRender,
-        PathArg::B => Workflow::TailFoldback,
-        PathArg::Auto => detected,
-    };
-    let fold = chosen == Workflow::TailFoldback;
-    let skip_bars = args.skip.unwrap_or(match chosen {
-        Workflow::TailFoldback | Workflow::AlreadyTrimmed => 0,
-        // Unclear falls back to a straight cut one loop in: audible and
-        // reversible, where a wrong foldback quietly doubles the tails.
-        Workflow::WarmupRender | Workflow::Unclear => bars,
-    });
-
-    let region = grid.region(skip_bars, bars, args.align);
-    let loop_frames = usize::try_from(region.len()).map_err(|_| "loop is too long to index")?;
+    let outcome = pipeline::run(&wav, &name, &args.params).map_err(|e| named(e.to_string()))?;
+    let rate = outcome.sample_rate;
 
     let mut s = String::new();
     writeln!(s, "{}", file.display())?;
     writeln!(
         s,
-        "  source       {} frames, {}  at {tempo} ({tempo_source}), {}",
-        source.frames(),
-        timecode(source.frames() as u64, format.sample_rate),
-        args.sig
+        "  source       {} frames, {}  at {} ({}), {}",
+        outcome.source_frames,
+        timecode(outcome.source_frames as u64, rate),
+        outcome.tempo,
+        outcome.tempo_source.label(),
+        outcome.sig()
     )?;
     writeln!(
         s,
         "  shape        {:.4} bars, {:.4} audible — {}",
-        guess.bars_in_file,
-        guess.audible_bars,
-        describe(detected)
+        outcome.shape.bars_in_file,
+        outcome.shape.audible_bars,
+        describe(outcome.detected)
     )?;
-    writeln!(s, "  loop         {bars} bars{bars_source}, skip {skip_bars}, align {}", args.align)?;
-    if args.workflow != PathArg::Auto && chosen != detected {
+    writeln!(
+        s,
+        "  loop         {} bars{}, skip {}, align {}",
+        outcome.bars,
+        outcome.bars_source.label(),
+        outcome.skip_bars,
+        args.params.align
+    )?;
+    if args.params.workflow.is_some() && outcome.chosen != outcome.detected {
         writeln!(s, "  ! --path overrides the detected shape")?;
     }
 
-    // Shortness is decided once, before either path, because both fail the same
-    // way: the region names more frames than the file holds. Much of the archive
-    // is short by a handful of frames — a previous tool rounded down — and 8
-    // frames per repeat is still drift, so this is refused rather than absorbed.
-    // A dry run reports it instead: surveying an archive is exactly when you
-    // want to see the problem rather than stop at it.
-    let from_region = source.frames().saturating_sub(region.start as usize);
-    let short_by = loop_frames.saturating_sub(from_region);
-    if short_by > 0 {
+    // Shortness is decided once, because both paths fail the same way: the
+    // region names more frames than the file holds. Much of the archive is short
+    // by a handful of frames — a previous tool rounded down — and 8 frames per
+    // repeat is still drift, so this is refused rather than absorbed. A dry run
+    // reports it instead: surveying an archive is exactly when you want to see
+    // the problem rather than stop at it.
+    if outcome.short_by > 0 {
         writeln!(
             s,
-            "  ! short by {short_by} frames — the file holds {from_region} of the {loop_frames} \
-             a {bars}-bar loop needs at this tempo"
+            "  ! short by {} frames — the file holds {} of the {} a {}-bar loop needs at this tempo",
+            outcome.short_by, outcome.available, outcome.loop_frames, outcome.bars
         )?;
         if !args.dry_run && !args.allow_short {
             return Err(named(format!(
-                "{short_by} frames short of a {bars}-bar loop — re-render longer, lower --bars, \
-                 or pass --allow-short to accept a loop that drifts"
+                "{} frames short of a {}-bar loop — re-render longer, lower --bars, \
+                 or pass --allow-short to accept a loop that drifts",
+                outcome.short_by, outcome.bars
             ))
             .into());
         }
-        if !fold {
-            writeln!(s, "  ! the result will drift: it is not a whole {bars} bars")?;
+    }
+
+    match &outcome.taken {
+        pipeline::Taken::Foldback(report) => writeln!(
+            s,
+            "  path B — folded {} tail frames back in {} wrap(s), peak {:.6} → {:.6}",
+            report.tail_frames, report.wraps, report.peak_before, report.peak_after
+        )?,
+        taken => {
+            if matches!(taken, pipeline::Taken::TooShortToFold) {
+                writeln!(s, "  ! too short to fold — taking a straight cut instead")?;
+            }
+            writeln!(
+                s,
+                "  path A — cut {} .. {}, tail discarded",
+                outcome.region.start, outcome.region.end
+            )?;
+            if outcome.short_by > 0 {
+                writeln!(
+                    s,
+                    "  ! the result will drift: it is not a whole {} bars",
+                    outcome.bars
+                )?;
+            }
         }
     }
 
-    // The two paths, never combined: a warmup render already contains the
-    // settled state, so folding its tail in would add the reverb twice.
-    let (mut cut_buffer, note) = if fold && short_by == 0 {
-        // Foldback needs the loop *and* everything after it, in one piece.
-        let from_start = source.slice(
-            usize::try_from(region.start).unwrap_or(usize::MAX),
-            source.frames(),
-        );
-        let (folded, report) = foldback(&from_start, loop_frames).map_err(|e| named(e.to_string()))?;
-        let note = format!(
-            "path B — folded {} tail frames back in {} wrap(s), peak {:.6} → {:.6}",
-            report.tail_frames, report.wraps, report.peak_before, report.peak_after
-        );
-        (folded, note)
-    } else {
-        // A source too short to fill the loop has no tail to fold, so there is
-        // nothing for path B to do with it: take what is there and say so.
-        let c = cut(&source, region);
-        if fold {
-            writeln!(s, "  ! too short to fold — taking a straight cut instead")?;
-        }
-        (c.buffer, format!("path A — cut {} .. {}, tail discarded", region.start, region.end))
-    };
-    writeln!(s, "  {note}")?;
-
-    // Fades: on for a straight cut, off for a foldback. A foldback loop is
-    // circular by construction, and fading both ends to zero would undo exactly
-    // the continuity it just computed. A straight cut has no such guarantee —
-    // its boundaries fall wherever the bar grid says, mid-waveform or not.
-    let fade = if args.no_fade {
-        Fade::new(0, FadeShape::default())
-    } else {
-        match args.fade {
-            Some(ms) => Fade::from_millis(ms, format.sample_rate),
-            None if fold => Fade::new(0, FadeShape::default()),
-            None => Fade::micro(format.sample_rate),
-        }
-    };
-    if fade.is_none() {
+    if outcome.fade.is_none() {
         writeln!(s, "  fade         none")?;
     } else {
-        fade.apply_both(&mut cut_buffer);
         writeln!(
             s,
             "  fade         {} frames each end, {:?}",
-            fade.frames, fade.shape
+            outcome.fade.frames, outcome.fade.shape
         )?;
     }
 
-    // Varispeed, after the cut: the bar grid is exact in the original domain,
-    // so resampling last costs one rounding of the output length instead of
-    // compounding with the cut. The order is binding.
-    let ratio = resolve_ratio(args, &grid, bars)?;
-    let final_tempo = ratio.resulting_tempo(tempo).map_err(|e| named(e.to_string()))?;
-    if !ratio.is_unity() {
-        let target = grid.resampled_length(bars, ratio) as usize;
-        // The length comes from the grid at the new tempo, never from
-        // `old_length / ratio` — that would round a second time.
-        cut_buffer = SincResampler::default()
-            .with_edge(Edge::Wrap)
-            .resample(&cut_buffer, target)
-            .map_err(|e| named(e.to_string()))?;
-        writeln!(s, "  varispeed    {ratio}")?;
+    if !outcome.ratio.is_unity() {
+        writeln!(s, "  varispeed    {}", outcome.ratio)?;
         writeln!(
             s,
-            "               {tempo} → {final_tempo}, {} frames{}",
-            cut_buffer.frames(),
-            if ratio.is_exact() { ", exact ratio" } else { "" }
+            "               {} → {}, {} frames{}",
+            outcome.tempo,
+            outcome.final_tempo,
+            outcome.buffer.frames(),
+            if outcome.ratio.is_exact() { ", exact ratio" } else { "" }
         )?;
     }
 
-    // Character after the varispeed, because both filters scale their corner
-    // frequencies with the speed actually played — and because a filter can only
-    // be warmed up over a loop whose length has stopped changing.
-    let character = tape::apply(&mut cut_buffer, &args.tape, ratio);
-    if let Some(line) = describe_tape(&character) {
+    if let Some(line) = describe_tape(&outcome.tape) {
         write!(s, "{line}")?;
-    } else if args.tape.enabled {
+    } else if args.params.tape.enabled {
         writeln!(s, "  tape         on, but every amount is zero — nothing applied")?;
     }
 
-    let mut peak = gain::Peak::measure(&cut_buffer);
-    if args.normalize {
-        if let Some(factor) = gain::normalize(&mut cut_buffer, gain::FULL_SCALE) {
-            writeln!(
-                s,
-                "  normalize    ×{factor:.6} ({:+.2} dB), peak {:.6} → 1.000000",
-                20.0 * factor.log10(),
-                peak.value
-            )?;
-            peak = gain::Peak::measure(&cut_buffer);
-        }
+    if let Some((factor, before)) = outcome.normalized {
+        writeln!(
+            s,
+            "  normalize    ×{factor:.6} ({:+.2} dB), peak {before:.6} → 1.000000",
+            20.0 * factor.log10()
+        )?;
     }
 
-    // Dither immediately before quantisation, and only when the depth actually
-    // drops — noise added at or above the source depth is pure loss.
-    let mode = match args.dither {
-        DitherArg::Off => Dither::None,
-        DitherArg::On => Dither::Tpdf,
-        DitherArg::Shaped => Dither::Shaped,
-        DitherArg::Auto => {
-            if dither::is_called_for(format.bits_per_sample, args.depth) {
-                Dither::Tpdf
-            } else {
-                Dither::None
-            }
-        }
-    };
-    match dither::apply(&mut cut_buffer, args.depth, mode, args.dither_seed) {
-        Some(applied) => writeln!(
+    match outcome.dither {
+        Some((_, applied)) => writeln!(
             s,
             "  dither       {} at {} bit, seed {}{}",
             if applied.quantised {
@@ -918,61 +812,71 @@ fn run_cut(file: &Path, out: Out, args: &Settings) -> Result<Cut, Box<dyn Error>
             } else {
                 "TPDF ±1 LSB"
             },
-            args.depth.bits(),
-            args.dither_seed,
+            args.params.depth.bits(),
+            args.params.dither_seed,
             // Worth saying, because it is the one place a stage downstream of
             // the dither would be a mistake: the samples are already on the
             // output grid, so anything touching them now would need dithering
             // all over again.
             if applied.quantised { ", already quantised" } else { "" }
         )?,
-        None if args.dither == DitherArg::Auto && !args.depth.is_float() => writeln!(
-            s,
-            "  dither       none ({} bit in, {} bit out — no depth reduction)",
-            format.bits_per_sample,
-            args.depth.bits()
-        )?,
+        None if args.params.dither == pipeline::DitherPolicy::Auto
+            && !args.params.depth.is_float() =>
+        {
+            writeln!(
+                s,
+                "  dither       none ({} bit in, {} bit out — no depth reduction)",
+                outcome.source_bits,
+                args.params.depth.bits()
+            )?
+        }
         None => {}
     }
 
     writeln!(
         s,
         "  result       {} frames, {}  peak {:.6} {}",
-        cut_buffer.frames(),
-        timecode(cut_buffer.frames() as u64, format.sample_rate),
-        peak.value,
-        dbfs(peak.value)
+        outcome.buffer.frames(),
+        timecode(outcome.buffer.frames() as u64, rate),
+        outcome.peak.value,
+        dbfs(outcome.peak.value)
     )?;
-    if peak.clips() && args.depth.clips() {
+    if outcome.peak.clips() && args.params.depth.clips() {
         writeln!(
             s,
             "  ! peak is past full scale — {}-bit output will clip. Use --normalize or --depth 32f",
-            args.depth.bits()
+            args.params.depth.bits()
         )?;
     }
+
     // The grid residual describes the *region*, so it would understate a short
     // output by orders of magnitude: 78 missing frames are 1.8 ms of drift per
     // repeat, not the 4 µs of rounding the region carries.
-    if cut_buffer.frames() < loop_frames {
-        let missing = loop_frames - cut_buffer.frames();
+    if let Some((missing, seconds)) = outcome.drift() {
         writeln!(
             s,
             "  length       {missing} frames short — drifts {:.3} ms per repeat",
-            missing as f64 / format.sample_rate as f64 * 1000.0
+            seconds * 1000.0
         )?;
-    } else if ratio.is_unity() {
-        writeln!(s, "  length       {}", grid.length_residual(skip_bars, bars, args.align))?;
+    } else if outcome.ratio.is_unity() {
+        writeln!(
+            s,
+            "  length       {}",
+            outcome
+                .grid
+                .length_residual(outcome.skip_bars, outcome.bars, args.params.align)
+        )?;
     } else {
         // After a varispeed the residual to report is against the *new* grid:
         // the old one no longer describes this file.
-        let scaled = grid.scaled(ratio).map_err(|e| named(e.to_string()))?;
-        let exact = scaled.exact_sample(bars);
+        let scaled = outcome.grid.scaled(outcome.ratio).map_err(|e| named(e.to_string()))?;
         writeln!(
             s,
-            "  length       {} vs {:.4} exact at {final_tempo}{}",
-            cut_buffer.frames(),
-            exact.to_f64(),
-            if scaled.is_sample_exact(bars) {
+            "  length       {} vs {:.4} exact at {}{}",
+            outcome.buffer.frames(),
+            scaled.exact_sample(outcome.bars).to_f64(),
+            outcome.final_tempo,
+            if scaled.is_sample_exact(outcome.bars) {
                 " — sample-exact"
             } else {
                 ""
@@ -983,8 +887,10 @@ fn run_cut(file: &Path, out: Out, args: &Settings) -> Result<Cut, Box<dyn Error>
     // The output is named and tagged with the tempo it actually plays at.
     let dest = match out {
         Out::File(path) => path.to_path_buf(),
-        Out::Dir(dir) => dir.join(default_name(file, &final_tempo, bars)),
-        Out::BesideSource => file.with_file_name(default_name(file, &final_tempo, bars)),
+        Out::Dir(dir) => dir.join(default_name(file, &outcome.final_tempo, outcome.bars)),
+        Out::BesideSource => {
+            file.with_file_name(default_name(file, &outcome.final_tempo, outcome.bars))
+        }
     };
     writeln!(s, "  out          {}", dest.display())?;
 
@@ -992,8 +898,10 @@ fn run_cut(file: &Path, out: Out, args: &Settings) -> Result<Cut, Box<dyn Error>
     // the report: a batch listing needs the tempo, length and destination, and
     // the last line of the report happens to be none of those.
     let summary = format!(
-        "{bars} bars at {final_tempo}, {} frames → {}",
-        cut_buffer.frames(),
+        "{} bars at {}, {} frames → {}",
+        outcome.bars,
+        outcome.final_tempo,
+        outcome.buffer.frames(),
         dest.file_name().unwrap_or_default().to_string_lossy()
     );
 
@@ -1012,103 +920,45 @@ fn run_cut(file: &Path, out: Out, args: &Settings) -> Result<Cut, Box<dyn Error>
         return Err(format!("{}: exists — pass --force to overwrite", dest.display()).into());
     }
 
-    let beats = bars * args.sig.num as u64;
     let comment = format!(
-        "LOOP_SLCR: {final_tempo}, {} bars, {}, {} frames{}",
-        bars,
-        args.sig,
-        cut_buffer.frames(),
-        if ratio.is_unity() {
+        "LOOP_SLCR: {}, {} bars, {}, {} frames{}",
+        outcome.final_tempo,
+        outcome.bars,
+        outcome.sig(),
+        outcome.buffer.frames(),
+        if outcome.ratio.is_unity() {
             String::new()
         } else {
-            format!(" (varispeed {:+.3} st from {tempo})", ratio.semitones())
+            format!(
+                " (varispeed {:+.3} st from {})",
+                outcome.ratio.semitones(),
+                outcome.tempo
+            )
         }
     );
-    let spec = WriteSpec::new(args.depth).with_metadata(
+    let spec = WriteSpec::new(args.params.depth).with_metadata(
         Metadata::for_loop(
-            final_tempo.value().to_f64() as f32,
-            u32::try_from(beats).unwrap_or(u32::MAX),
-            args.sig.num as u16,
-            args.sig.den as u16,
-            u32::try_from(cut_buffer.frames()).unwrap_or(u32::MAX),
+            outcome.final_tempo.value().to_f64() as f32,
+            u32::try_from(outcome.beats()).unwrap_or(u32::MAX),
+            outcome.sig().num as u16,
+            outcome.sig().den as u16,
+            u32::try_from(outcome.buffer.frames()).unwrap_or(u32::MAX),
         )
         .with_comment(comment),
     );
-    let encoded = write(&cut_buffer, &spec)?;
+    let encoded = write(&outcome.buffer, &spec)?;
     std::fs::write(&dest, &encoded).map_err(|e| format!("{}: {e}", dest.display()))?;
-    writeln!(s, "  wrote        {} bytes, {}-bit", encoded.len(), args.depth.bits())?;
+    writeln!(
+        s,
+        "  wrote        {} bytes, {}-bit",
+        encoded.len(),
+        args.params.depth.bits()
+    )?;
 
     Ok(Cut {
         text: s,
-        summary: format!("{summary}, {}-bit", args.depth.bits()),
+        summary: format!("{summary}, {}-bit", args.params.depth.bits()),
     })
-}
-
-/// The varispeed ratio the flags ask for.
-///
-/// `--snap` is the interesting one: it nudges the *resulting* tempo to the
-/// nearest at which the loop is a whole number of samples, reusing the same
-/// search that `loopslcr grid` prints. On its own — no pitch, no target — it
-/// makes an otherwise inexact loop exact for the price of a few cents.
-fn resolve_ratio(args: &Settings, grid: &Grid, bars: u64) -> Result<Ratio, Box<dyn Error>> {
-    let source = grid.tempo;
-    let wanted = match (args.ratio, args.target_bpm) {
-        (Some(ratio), _) => ratio,
-        (None, Some(target)) => Ratio::from_tempi(source, target)?,
-        (None, None) => Ratio::UNITY,
-    };
-    if !args.snap {
-        return Ok(wanted);
-    }
-
-    // Candidates are searched around the tempo the varispeed lands on, not
-    // around the source tempo.
-    let landing = wanted.resulting_tempo(source)?;
-    let near = Grid { tempo: landing, ..*grid };
-    if near.is_sample_exact(bars) {
-        return Ok(wanted);
-    }
-    let Some(best) = near
-        .sample_exact_bpms(bars, args.snap_window)
-        .into_iter()
-        .filter_map(|bpm| Tempo::bpm(bpm).ok())
-        // Nearest in BPM, compared as exact fractions — `Rational` is `Ord`, so
-        // this needs no float and no scaled integer key.
-        .min_by_key(|t| (t.value() - landing.value()).abs())
-    else {
-        return Err(format!(
-            "no sample-exact tempo within ±{} BPM of {landing} for {bars} bars",
-            args.snap_window
-        )
-        .into());
-    };
-    Ok(Ratio::from_tempi(source, best)?)
-}
-
-/// Where the loop length came from. Not cosmetic: the shape of the file is read
-/// from the same source as its length, so these must not drift apart.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum BarsSource {
-    Given,
-    Filename,
-    FileLength,
-}
-
-impl std::fmt::Display for BarsSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            BarsSource::Given => "",
-            BarsSource::Filename => " (from filename)",
-            BarsSource::FileLength => " (from file length)",
-        })
-    }
-}
-
-/// A loop length stated in the filename, when `--bars-from-name` asked for it.
-fn naming_bars(args: &Settings, name: &str) -> Option<u64> {
-    args.bars_from_name
-        .then(|| naming::bars_from_name(name))
-        .flatten()
 }
 
 /// Reports the character actually imposed, or `None` if none was.

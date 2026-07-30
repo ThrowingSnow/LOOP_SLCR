@@ -24,6 +24,18 @@ impl Tempo {
     }
 
     /// Integer BPM against the default quarter-note unit — the common case.
+    /// The tempo an `acid` chunk declares.
+    ///
+    /// Via the decimal spelling rather than `f32 as f64`: a chunk saying 103.5
+    /// should become the exact fraction 207/2, not the binary approximation of
+    /// it, because that fraction is what makes the loop length exact.
+    pub fn from_f32(tempo: f32) -> Option<Self> {
+        if !tempo.is_finite() || tempo <= 0.0 {
+            return None;
+        }
+        format!("{tempo}").parse().ok()
+    }
+
     pub fn bpm(bpm: u32) -> Result<Self> {
         Tempo::new(Rational::from_int(bpm as i128), BpmUnit::quarter())
     }

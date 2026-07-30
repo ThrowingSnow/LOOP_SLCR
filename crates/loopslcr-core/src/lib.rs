@@ -25,6 +25,7 @@ pub mod buffer;
 pub mod error;
 pub mod naming;
 pub mod ops;
+pub mod pipeline;
 pub mod rational;
 pub mod timing;
 pub mod wav;
