@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/loopslcr-core", "crates/loopslcr-cli"]
+members = ["crates/loopslcr-core", "crates/loopslcr-cli", "crates/loopslcr-jni"]
 
 [workspace.package]
 version = "0.1.0"

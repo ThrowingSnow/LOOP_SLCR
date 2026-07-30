@@ -1,0 +1,18 @@
+[package]
+name = "loopslcr-jni"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "loopslcr_jni"
+# `cdylib` is what Android loads; `rlib` is what the tests link against, so the
+# marshalling can be exercised without a JVM as well as with one.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+loopslcr-core.workspace = true
+jni = "0.21"
+
+[dev-dependencies]
+# The JVM test needs to synthesise a WAVE file to feed across the boundary.
+loopslcr-core.workspace = true
