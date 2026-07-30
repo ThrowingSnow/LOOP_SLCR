@@ -3,10 +3,10 @@
 > Name fixed: **LOOP_SLCR**. Crates are `loopslcr-core` / `loopslcr-cli` /
 > `loopslcr-jni`, the binary is `loopslcr`.
 >
-> **Status:** M1 done, M2 (v0.2) done bar noise-shaped dither, M3 (v0.3) done.
-> The whole chain runs: read → cut → foldback → fade → varispeed → tape character
-> → normalize → dither → write, with `--dry-run` verified over the 279-file
-> archive. Last updated 30.07.2026.
+> **Status:** M1–M4 done, bar noise-shaped dither. The whole chain runs:
+> read → cut → foldback → fade → varispeed → tape character → normalize → dither
+> → write, and `loopslcr batch` puts the 279-file archive through it in 1.3
+> seconds. Next is M5, the Android APK. Last updated 30.07.2026.
 
 ## Vision
 
@@ -202,19 +202,77 @@ lower, and that is the same coefficient doing both.
 
 ## v0.4 — Batch + Ergonomics
 
-- [ ] `loopslcr batch <dir>` with rayon parallelism
-- [ ] `--bpm-from-name` — regex `^(\d{2,3})\b` is not enough on its own. The
-      archive holds `102-MTRX-01.wav` and `105CSTC-APRL02-...` (no word break
-      after the number), `00005 136BPM E01...` (marker, not leading), and
-      `58.5 DL_4BAR_...` (**decimal tempo** — truncating it to 58 puts the file
-      off the grid). 14 files carry no tempo in the name at all and need it
-      passed in.
-- [ ] Per-directory preset file (`loopslcr.toml`)
-- [ ] Progress reporting, per-file error collection, non-fatal continue
-- [ ] `--out-dir` with structure preservation
-- [ ] Shell completions (fish, bash, zsh)
+- [x] `loopslcr batch <dir>` with rayon parallelism, `--jobs`, `--recursive`
+- [x] `--bpm-from-name` — done in v0.1 already, because the archive forced it:
+      `102-MTRX-01.wav` and `105CSTC-APRL02-...` have no word break after the
+      number, `00005 136BPM E01...` puts the marker in the middle, and
+      `58.5 DL_4BAR_...` is a **decimal tempo** that truncates to a file off the
+      grid. 14 files carry no tempo anywhere and need one passed in.
+- [x] Per-directory preset file — **`loopslcr.args`, not `loopslcr.toml`**, see below
+- [x] Progress reporting (stderr), per-file error collection, non-fatal continue
+- [x] `--out-dir` with structure preservation
+- [x] Shell completions: `loopslcr completions fish|bash|zsh|…`
 
-**Milestone: the CLI is feature-complete and the archive is processable in one command.**
+**Milestone met. The archive is processable in one command:**
+
+```console
+$ loopslcr batch "…/DRUMLOOPS" --out-dir ./cut --allow-short
+  ok      102-MTRX-01.wav — 4 bars at 102 BPM, 415059 frames → 102-MTRX-01_102bpm_4bars.wav, 24-bit
+  …
+  261 cut, 16 failed, 2 not WAVE files
+failed:
+  …/ACEVNTRA-01.wav: no tempo known — pass --bpm (no acid chunk, none in the name)
+  …
+```
+
+**1.29 s wall for 261 files** at 1481 % CPU, 692 MB written. The 16 failures are
+the 14 files with no tempo anywhere plus 2 too short to name a loop length; the
+2 skips are the zip archives. Exit code 1 — a half-finished batch that reports
+success is a trap for whatever script called it, so *failed* and *worked* are
+distinguished by the exit status, not only by the text.
+
+**Skipped is not failed.** A zip file in a folder of drum loops is not an error,
+it is not a drum loop. The test is the first twelve bytes rather than the
+extension, because two of the archive's WAVE files have no `.wav` on them.
+
+**The output is deterministic.** Work runs on every core, but the report is
+assembled in sorted path order and the audio does not depend on the thread that
+produced it: `--jobs 1` and `--jobs 16` print identical bytes, and two runs write
+261 byte-identical files. That is invariant 4 holding across parallelism.
+
+### The preset is a file of flags, not TOML
+
+The plan said `loopslcr.toml`. TOML would have been a second source of truth for
+the flag set: every flag needs a key, every key a type, and the two lists drift
+the first time a flag is added without remembering the parser.
+
+`loopslcr.args` holds the flags you would have typed, and clap parses them — one
+grammar, nothing to keep in sync, and a flag added tomorrow works in a preset
+written today. One flag per line; everything after the first space is the value,
+verbatim, so a path with spaces needs no quoting. `#` comments, blank lines
+ignored.
+
+```
+# 4-bar loops at 16 bit, the way this folder was rendered
+--bars 4
+--depth 16
+--out-dir /mnt/loops/cut clean
+```
+
+Presets are spliced in *ahead* of what was typed, so the command line wins —
+which needs `args_override_self`, or clap refuses the repetition and a preset can
+only ever add, never override. The preset is named in the report: a file that
+changes what a command does must not do so invisibly. `--no-preset` ignores it,
+which is the honest way out of a switch a preset turned on, since inventing a
+`--no-` twin for every boolean would be the config file dictating the interface.
+
+### What the archive found this time
+
+`Path::file_stem` strips whatever follows the last dot. The archive holds
+`78-SMPL.BRN-21OCT23-01` and `78-SMPL.BRN-21OCT23-02` — two WAVE files with no
+extension at all — and `file_stem` reduces both to `78-SMPL`, so the second
+output refused to overwrite the first and one loop went missing. 260 files out of
+261. `naming::output_stem` now drops an extension only when it recognises one.
 
 ---
 
@@ -291,8 +349,8 @@ lower, and that is the same coefficient doing both.
 | M1 | v0.1 Core + CLI, exact cut math, dry-run over the archive | **DONE** |
 | M2 | v0.2 Varispeed, bit depth, dither, BPM tagging | **DONE** bar noise-shaped dither |
 | M3 | v0.3 Tape character with loop-periodic modulation | **DONE** |
-| M4 | v0.4 Batch processing, CLI feature-complete | **IN PROGRESS** — next |
-| M5 | v1.0 Android APK, two tabs, tape-riding preview | TODO |
+| M4 | v0.4 Batch processing, CLI feature-complete | **DONE** |
+| M5 | v1.0 Android APK, two tabs, tape-riding preview | **IN PROGRESS** — next |
 | M6 | v1.1 Saturation (oversampling + ADAA) | TODO |
 | M7 | v2.0 Slice export, Elektron export, desktop GUI | TODO |
 

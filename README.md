@@ -1,9 +1,10 @@
 # LOOP_SLCR
 
-> **Status: v0.1, v0.2 and v0.3 complete** bar noise-shaped dither. The whole
+> **Status: v0.1 through v0.4 complete** bar noise-shaped dither. The whole
 > chain runs — read → cut → foldback → fade → varispeed → tape character →
-> normalize → dither → write — behind `loopslcr cut`. `--dry-run` over the 279-file archive processes 261 and
-> refuses 18 with a named reason. **No runtime dependencies** in the core;
+> normalize → dither → write — behind `loopslcr cut`, and `loopslcr batch` puts
+> the whole 279-file archive through it in **1.3 seconds**: 261 cut, 16 refused
+> with a named reason, 2 not WAVE files. **No runtime dependencies** in the core;
 > `hound` and `rubato` are test-only second opinions.
 > See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the breakdown.
 
@@ -59,6 +60,43 @@ $ loopslcr cut "103 29Jul26 1Punkt1 Cstc.wav"
 Tempo, loop length and workflow are all read off the file; `--dry-run` reports
 the same without writing. Add `--bpm`, `--bars`, `--skip` or `--path` to override
 any of it.
+
+A whole directory in one command:
+
+```console
+$ loopslcr batch "…/DRUMLOOPS" --out-dir ./cut --allow-short
+  ok      102-MTRX-01.wav — 4 bars at 102 BPM, 415059 frames → 102-MTRX-01_102bpm_4bars.wav, 24-bit
+  …
+  261 cut, 16 failed, 2 not WAVE files
+failed:
+  …/ACEVNTRA-01.wav: no tempo known — pass --bpm (no acid chunk, none in the name)
+  …
+```
+
+Every file is attempted and every failure keeps its own reason, because a batch
+that stopped at the first unusable file would never reach the other 261. The exit
+code is still 1 when anything failed — a half-finished batch that reports success
+is a trap for whatever script called it. A zip file among the loops is *skipped*
+rather than failed, decided on the first twelve bytes rather than the extension,
+since two of these WAVE files carry no `.wav` at all.
+
+**The output does not depend on the thread that produced it.** `--jobs 1` and
+`--jobs 16` print identical bytes and write 261 byte-identical files.
+
+Per-directory settings live in `loopslcr.args`, holding the flags you would have
+typed — one grammar rather than a TOML schema that has to be kept in step with
+the flag set:
+
+```
+# 4-bar loops at 16 bit, the way this folder was rendered
+--bars 4
+--depth 16
+--out-dir /mnt/loops/cut clean
+```
+
+Everything after the first space is the value, verbatim, so a path with spaces
+needs no quoting. Typed flags override the preset, the preset is named in the
+report, and `--no-preset` ignores it.
 
 Varispeed fits a loop to another tempo, exactly:
 
@@ -157,6 +195,10 @@ length = `round(bars · samplesPerBar)`) or **grid priority** (both markers on g
   the output is byte-identical to the clean path
 - Bit depth selectable (16/24/32f) with TPDF dither
 - BPM declared four ways: filename template, `acid` chunk, `smpl` chunk, `LIST/INFO`
+- **Batch** — a directory at a time on every core, carrying on past the files it
+  cannot cut and naming each reason; deterministic output regardless of thread
+  count, `--out-dir` mirroring the source tree, per-directory `loopslcr.args`
+  presets, shell completions
 - **BPM/time calculator** in the style of `toolstud.io/music/bpm.php`, extended with
   dotted and triplet rows plus sample counts
 
@@ -201,8 +243,8 @@ archive of 279 loops. v1.0 adds a deliberately narrow JNI surface and a Compose 
 | M1 | v0.1 core + CLI, exact cut math, dry-run over the archive | **done** |
 | M2 | v0.2 varispeed, bit depth, dither, BPM tagging | **done** |
 | M3 | v0.3 tape character with loop-periodic modulation | **done** |
-| M4 | v0.4 batch processing, CLI feature-complete | next |
-| M5 | v1.0 Android APK, two tabs, tape-riding preview | |
+| M4 | v0.4 batch processing, CLI feature-complete | **done** |
+| M5 | v1.0 Android APK, two tabs, tape-riding preview | next |
 | M6 | v1.1 saturation (oversampling + ADAA) | |
 | M7 | v2.0 slice export, Elektron export, desktop GUI | |
 

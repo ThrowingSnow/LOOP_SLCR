@@ -104,6 +104,32 @@ fn stem(name: &str) -> &str {
     }
 }
 
+/// Extensions an output filename may drop.
+pub const AUDIO_EXTENSIONS: &[&str] = &["wav", "wave", "aif", "aiff", "flac"];
+
+/// The part of `name` to build an output filename from.
+///
+/// **Not** `Path::file_stem`, which strips whatever follows the last dot. The
+/// archive holds `78-SMPL.BRN-21OCT23-01` and `78-SMPL.BRN-21OCT23-02` — two
+/// WAVE files with no extension at all — and `file_stem` reduces both to
+/// `78-SMPL`, so the second output overwrites the first. Found by running the
+/// batch over the archive, which is exactly what that run is for.
+///
+/// So an extension is only dropped when it is one this program recognises as an
+/// audio extension. Anything else is part of the name, because it is.
+pub fn output_stem(name: &str) -> &str {
+    if let Some(at) = name.rfind('.') {
+        let extension = &name[at + 1..];
+        if AUDIO_EXTENSIONS
+            .iter()
+            .any(|known| extension.eq_ignore_ascii_case(known))
+        {
+            return &name[..at];
+        }
+    }
+    name
+}
+
 /// Case-insensitive check for `marker` at the start of `s`, after any spaces,
 /// underscores or hyphens.
 fn starts_with_marker(s: &str, markers: &[&str]) -> bool {
@@ -262,5 +288,26 @@ mod tests {
         let huge = "9".repeat(200);
         assert_eq!(bpm(&format!("{huge}.wav")), None);
         assert_eq!(bpm(&format!("103 {huge}.wav")).as_deref(), Some("103"));
+    }
+
+    #[test]
+    fn an_output_stem_only_drops_a_real_audio_extension() {
+        assert_eq!(output_stem("103 Cstc.wav"), "103 Cstc");
+        assert_eq!(output_stem("103 Cstc.WAV"), "103 Cstc");
+        assert_eq!(output_stem("loop.aiff"), "loop");
+
+        // The two archive files that exposed the bug: no extension, and a dot
+        // in the middle of the name. `Path::file_stem` reduces both of these to
+        // `78-SMPL`, which names two different loops the same file.
+        assert_eq!(output_stem("78-SMPL.BRN-21OCT23-01"), "78-SMPL.BRN-21OCT23-01");
+        assert_eq!(output_stem("78-SMPL.BRN-21OCT23-02"), "78-SMPL.BRN-21OCT23-02");
+        assert_ne!(
+            output_stem("78-SMPL.BRN-21OCT23-01"),
+            output_stem("78-SMPL.BRN-21OCT23-02")
+        );
+
+        // A decimal tempo in the name is not an extension either.
+        assert_eq!(output_stem("58.5 DL_4BAR"), "58.5 DL_4BAR");
+        assert_eq!(output_stem("no dots here"), "no dots here");
     }
 }

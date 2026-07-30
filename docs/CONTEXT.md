@@ -12,9 +12,10 @@
 > 177 790 491 Frames, sample-für-sample identisch mit `hound`.
 > **`--dry-run` über alle 279 Archiv-Einträge:** 261 verarbeitet,
 > 18 mit benanntem Grund verweigert.
-> Nächster Schritt: v0.4 Batch. v0.3 Tape-Charakter ist gebaut — Wow/Flutter als
-> loop-periodische **Positions**-Verschiebung (nicht als modulierte Rate), damit die
-> Länge invariant bleibt und die Naht per Konstruktion stetig ist.
+> **`loopslcr batch` schiebt das ganze Archiv in 1,3 s durch:** 261 geschnitten,
+> 16 mit benanntem Grund verweigert, 2 keine WAVE-Dateien. Ausgabe deterministisch
+> unabhängig von der Thread-Zahl.
+> Nächster Schritt: v1.0, die Android-APK.
 > **Letztes Update:** Session 3 — 30.07.2026
 
 ---
@@ -309,7 +310,7 @@ read → cut (exakt, Original-Domain)
 - [ ] BPM-Rechner-Screen (siehe §5)
 
 ### v1.5
-- [ ] Batch-Modus: Preset auf ganzen Ordner anwenden
+- [x] Batch-Modus: Preset auf ganzen Ordner anwenden (`loopslcr.args`)
 - [ ] Auto-Detect: aus Dateiname BPM raten (`103 29Jul26...` → 103)
 - [ ] Auto-Detect: aus Dauer + BPM die Bar-Anzahl vorschlagen
 - [ ] Tail-Länge messen (Abfall unter −60 dBFS) + Warnung wenn Tail > Loop-Länge
@@ -403,7 +404,7 @@ loopslcr/
 loopslcr info  in.wav
 loopslcr cut   in.wav --bpm 103 --bars 8 --skip 8 --tail discard -o out.wav
 loopslcr cut   in.wav --bpm 103 --bars 8 --skip 0 --tail fold    -o out.wav
-loopslcr batch ./drumloops --bpm-from-name --bars 8 -o ./cut/
+loopslcr batch ./drumloops --recursive --out-dir ./cut/ --jobs 8
 ```
 
 Flags: `--sig 7/8` · `--bpm-unit 1/4` · `--align loop|grid` · `--fade 1ms`
@@ -411,6 +412,8 @@ Flags: `--sig 7/8` · `--bpm-unit 1/4` · `--align loop|grid` · `--fade 1ms`
 · `--pitch -2.34st` **oder** `--target-bpm 90` · `--tag acid,smpl,info`
 · `--tape` · `--wow 0.3` · `--flutter 0.15` · `--hf-rolloff auto|off|<Hz>`
 · `--head-bump 2|off` — jeder Charakter-Flag impliziert `--tape`
+· batch: `--recursive` · `--out-dir` · `--jobs N` · `--verbose` · `--no-preset`
+· Preset pro Ordner: `loopslcr.args` · Completions: `loopslcr completions fish`
 
 - **`--dry-run` ist der wichtigste Flag:** druckt Cut-Punkte, Restfehler in µs/ppm,
   Tail-Länge — schreibt nichts. Damit einmal über die 279 Archiv-Loops laufen und
@@ -560,6 +563,44 @@ Ohne geteilten State sind es zwei Apps in einer APK statt einem Werkzeug.
   würde der Test nur beweisen, dass `apply` nie erreicht wurde.
 - **Charakter-Flags implizieren `--tape`.** `--wow 0.5` ohne `--tape` wäre ein
   stiller No-Op, und das ist schlimmer als eine Implikation.
+
+### v0.4-Entscheidungen (30.07.2026)
+
+- **Das Preset ist eine Flag-Datei, kein TOML.** Geplant war `loopslcr.toml`; das
+  wäre eine **zweite Quelle der Wahrheit für die Flag-Liste** gewesen — jeder Flag
+  braucht einen Key, jeder Key einen Typ, und beide Listen driften beim ersten
+  Flag, das ohne den Parser dazukommt. `loopslcr.args` enthält die Flags, die man
+  sowieso getippt hätte, und clap parst sie: eine Grammatik, nichts
+  synchronzuhalten, und ein Flag von morgen funktioniert in einem Preset von
+  heute. Ein Flag pro Zeile, alles nach dem ersten Leerzeichen ist der Wert
+  wörtlich — Pfade mit Leerzeichen brauchen keine Quotes, und dieses Archiv liegt
+  unter genau so einem Pfad.
+- **Preset wird *vor* das Getippte gespleisst**, damit die Kommandozeile gewinnt.
+  Das braucht `args_override_self`, sonst lehnt clap die Wiederholung ab und ein
+  Preset kann nur hinzufügen, nie überschreiben. Das Preset steht im Report: eine
+  Datei, die das Verhalten ändert, darf das nicht unsichtbar tun. `--no-preset`
+  ignoriert sie ganz — der ehrliche Ausweg aus einem Schalter, den ein Preset
+  eingeschaltet hat, statt für jeden Boolean einen `--no-`-Zwilling zu erfinden.
+- **Übersprungen ≠ fehlgeschlagen.** Eine Zip-Datei im Loop-Ordner ist kein
+  Fehler, sie ist kein Loop. Entschieden an den ersten zwölf Bytes, nicht an der
+  Endung — zwei der Archiv-WAVEs haben gar keine.
+- **Exit-Code 1, wenn irgendetwas fehlschlug**, auch wenn der Batch weiterläuft.
+  Ein halb fertiger Batch, der Erfolg meldet, ist eine Falle für das aufrufende
+  Skript.
+- **Determinismus über Parallelität.** Gearbeitet wird auf allen Kernen, der
+  Report aber in sortierter Pfadreihenfolge zusammengesetzt, und das Audio hängt
+  nicht am Thread: `--jobs 1` und `--jobs 16` geben identische Bytes aus, zwei
+  Läufe schreiben 261 byte-identische Dateien. Invariante 4 gilt auch quer über
+  Threads.
+- **Ein Flag-Satz für `cut` und `batch`** (`CutFlags` als geflatteter clap-`Args`),
+  damit ein neuer Flag beide erreicht und sie nicht auseinanderdriften können. Die
+  Validierung passiert einmal in `CutFlags::resolve()`, bevor die erste Datei
+  angefasst wird — ein kaputtes `--pitch` scheitert einmal, nicht 279-mal.
+- **Vom Archiv gefunden:** `Path::file_stem` schneidet alles nach dem letzten
+  Punkt ab. `78-SMPL.BRN-21OCT23-01` und `-02` haben *keine* Endung, also wurden
+  beide zu `78-SMPL` und die zweite Ausgabe weigerte sich, die erste zu
+  überschreiben — 260 von 261. `naming::output_stem` streicht eine Endung jetzt
+  nur, wenn es sie als Audio-Endung kennt.
   `auto` dithert nur, wenn die Bittiefe **sinkt**; bei gleicher oder steigender
   wäre das Rauschen reiner Verlust.
 

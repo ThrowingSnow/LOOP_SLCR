@@ -1,13 +1,18 @@
 //! LOOP_SLCR command line interface.
 
+mod batch;
+mod preset;
+
 use std::error::Error;
+use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use batch::BatchArgs;
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use loopslcr_core::analysis::{self, Peaks, Tail, Workflow, WorkflowGuess};
 use loopslcr_core::naming;
 use loopslcr_core::ops::resample::{Edge, Resampler, SincResampler};
@@ -16,7 +21,15 @@ use loopslcr_core::timing::{Align, BpmUnit, Grid, Ratio, Tempo, TimeSignature};
 use loopslcr_core::wav::{chunks::Chunks, write, BitDepth, Metadata, SampleFormat, Wav, WriteSpec};
 
 #[derive(Parser)]
-#[command(name = "loopslcr", version, about = "Sample-exact loop trimming")]
+#[command(
+    name = "loopslcr",
+    version,
+    about = "Sample-exact loop trimming",
+    // A preset is spliced in ahead of what was typed, so every flag has to be
+    // allowed to appear twice with the later one winning. Without this clap
+    // refuses the repetition and the preset can only ever add, never override.
+    args_override_self = true
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -70,121 +83,42 @@ enum Command {
         #[arg(long, short)]
         out: Option<PathBuf>,
 
-        /// Tempo. Defaults to the file's `acid` chunk, then to its filename.
-        #[arg(long)]
-        bpm: Option<Tempo>,
+        #[command(flatten)]
+        flags: CutFlags,
+    },
 
-        /// Read the tempo from the filename in preference to the `acid` chunk.
-        #[arg(long = "bpm-from-name")]
-        bpm_from_name: bool,
+    /// Cut every loop in a directory, carrying on past the ones that cannot be.
+    Batch {
+        /// The directory to walk.
+        dir: PathBuf,
 
-        /// Bars to keep. Derived from the file's own length when omitted.
-        #[arg(long)]
-        bars: Option<u64>,
+        /// Where to write. Defaults to beside each source. The tree below `dir`
+        /// is recreated underneath, so two loops of the same name in different
+        /// folders stay two files.
+        #[arg(long = "out-dir")]
+        out_dir: Option<PathBuf>,
 
-        /// Prefer a loop length stated in the filename (`4BRS`, `2BARS`) over
-        /// the one derived from the file's length.
-        #[arg(long = "bars-from-name")]
-        bars_from_name: bool,
+        /// Descend into subdirectories.
+        #[arg(long, short)]
+        recursive: bool,
 
-        /// Warmup bars to skip. Defaults to what the file's shape implies.
-        #[arg(long)]
-        skip: Option<u64>,
+        /// Worker threads. Defaults to one per core.
+        #[arg(long, short)]
+        jobs: Option<usize>,
 
-        /// Time signature, N/D.
-        #[arg(long, default_value = "4/4")]
-        sig: TimeSignature,
+        /// Print each file's full report instead of one line per file.
+        #[arg(long, short)]
+        verbose: bool,
 
-        /// Note value the BPM counts, as a fraction of a whole note.
-        #[arg(long = "bpm-unit", default_value = "1/4")]
-        bpm_unit: BpmUnit,
+        #[command(flatten)]
+        flags: CutFlags,
+    },
 
-        /// Which constraint wins when a bar is not a whole number of samples.
-        #[arg(long, value_enum, default_value_t = AlignArg::Loop)]
-        align: AlignArg,
-
-        /// Which workflow the source was rendered for.
-        #[arg(long = "path", value_enum, default_value_t = PathArg::Auto)]
-        workflow: PathArg,
-
-        /// Varispeed by an interval: `-2.34` semitones, or `-234c` in cents.
-        /// Pitch and tempo move together, tape style.
-        #[arg(long, allow_hyphen_values = true)]
-        pitch: Option<String>,
-
-        /// Varispeed to land on this tempo. Exact: the ratio is a fraction.
-        #[arg(long = "target-bpm", conflicts_with = "pitch")]
-        target_bpm: Option<Tempo>,
-
-        /// Nudge the resulting tempo to the nearest one where the loop is a
-        /// whole number of samples. On its own, makes the loop sample-exact.
-        #[arg(long)]
-        snap: bool,
-
-        /// Search radius in BPM for --snap.
-        #[arg(long = "snap-window", default_value_t = 15)]
-        snap_window: u32,
-
-        /// Output bit depth: 16, 24, 32, or 32f.
-        #[arg(long, default_value = "24")]
-        depth: BitDepth,
-
-        /// Scale the loop so its peak sits at full scale. Off by default: a
-        /// level change is a decision about the material.
-        #[arg(long)]
-        normalize: bool,
-
-        /// TPDF dither: `auto` applies it only when the bit depth drops.
-        #[arg(long, default_value = "auto")]
-        dither: DitherArg,
-
-        /// Dither seed. Fixed by default so runs reproduce byte for byte.
-        #[arg(long = "dither-seed", default_value_t = dither::DEFAULT_SEED)]
-        dither_seed: u64,
-
-        /// Tape character: wow, flutter, head-gap HF loss, head bump. One
-        /// switch, so the clean path stays byte-identical when it is off.
-        #[arg(long)]
-        tape: bool,
-
-        /// Wow depth as peak speed deviation in percent. Implies --tape.
-        #[arg(long)]
-        wow: Option<f64>,
-
-        /// Flutter depth as peak speed deviation in percent. Implies --tape.
-        #[arg(long)]
-        flutter: Option<f64>,
-
-        /// Head-gap loss corner: `auto`, `off`, or a frequency in Hz at nominal
-        /// speed — it is scaled by the varispeed ratio. Implies --tape.
-        #[arg(long = "hf-rolloff")]
-        hf_rolloff: Option<String>,
-
-        /// Head bump height in dB, or `off`. Implies --tape.
-        #[arg(long = "head-bump")]
-        head_bump: Option<String>,
-
-        /// Micro-fade length in milliseconds. Defaults to 0.5 ms on a straight
-        /// cut and to none on a foldback, which is seamless already.
-        #[arg(long)]
-        fade: Option<f64>,
-
-        /// Never fade, whichever path is taken.
-        #[arg(long = "no-fade", conflicts_with = "fade")]
-        no_fade: bool,
-
-        /// Report what would happen and write nothing.
-        #[arg(long = "dry-run")]
-        dry_run: bool,
-
-        /// Write the loop even when the source is too short to fill it. The
-        /// result will drift against a sequencer — re-rendering is the fix.
-        #[arg(long = "allow-short")]
-        allow_short: bool,
-
-        /// Overwrite an existing output file.
-        #[arg(long)]
-        force: bool,
+    /// Print a shell completion script.
+    Completions {
+        /// The shell to generate for.
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
     },
 
     /// Show where the bar grid puts the cut points, and how exact they are.
@@ -222,6 +156,133 @@ enum Command {
         #[arg(long, default_value_t = 15)]
         window: u32,
     },
+}
+
+/// Every flag of the cutting pipeline, shared by `cut` and `batch`.
+///
+/// One struct rather than two lists, so a flag added here reaches both
+/// subcommands and they cannot drift apart.
+#[derive(clap::Args, Clone, Debug)]
+struct CutFlags {
+    /// Tempo. Defaults to the file's `acid` chunk, then to its filename.
+    #[arg(long)]
+    bpm: Option<Tempo>,
+
+    /// Read the tempo from the filename in preference to the `acid` chunk.
+    #[arg(long = "bpm-from-name")]
+    bpm_from_name: bool,
+
+    /// Bars to keep. Derived from the file's own length when omitted.
+    #[arg(long)]
+    bars: Option<u64>,
+
+    /// Prefer a loop length stated in the filename (`4BRS`, `2BARS`) over
+    /// the one derived from the file's length.
+    #[arg(long = "bars-from-name")]
+    bars_from_name: bool,
+
+    /// Warmup bars to skip. Defaults to what the file's shape implies.
+    #[arg(long)]
+    skip: Option<u64>,
+
+    /// Time signature, N/D.
+    #[arg(long, default_value = "4/4")]
+    sig: TimeSignature,
+
+    /// Note value the BPM counts, as a fraction of a whole note.
+    #[arg(long = "bpm-unit", default_value = "1/4")]
+    bpm_unit: BpmUnit,
+
+    /// Which constraint wins when a bar is not a whole number of samples.
+    #[arg(long, value_enum, default_value_t = AlignArg::Loop)]
+    align: AlignArg,
+
+    /// Which workflow the source was rendered for.
+    #[arg(long = "path", value_enum, default_value_t = PathArg::Auto)]
+    workflow: PathArg,
+
+    /// Varispeed by an interval: `-2.34` semitones, or `-234c` in cents.
+    /// Pitch and tempo move together, tape style.
+    #[arg(long, allow_hyphen_values = true)]
+    pitch: Option<String>,
+
+    /// Varispeed to land on this tempo. Exact: the ratio is a fraction.
+    #[arg(long = "target-bpm", conflicts_with = "pitch")]
+    target_bpm: Option<Tempo>,
+
+    /// Nudge the resulting tempo to the nearest one where the loop is a
+    /// whole number of samples. On its own, makes the loop sample-exact.
+    #[arg(long)]
+    snap: bool,
+
+    /// Search radius in BPM for --snap.
+    #[arg(long = "snap-window", default_value_t = 15)]
+    snap_window: u32,
+
+    /// Output bit depth: 16, 24, 32, or 32f.
+    #[arg(long, default_value = "24")]
+    depth: BitDepth,
+
+    /// Scale the loop so its peak sits at full scale. Off by default: a
+    /// level change is a decision about the material.
+    #[arg(long)]
+    normalize: bool,
+
+    /// TPDF dither: `auto` applies it only when the bit depth drops.
+    #[arg(long, default_value = "auto")]
+    dither: DitherArg,
+
+    /// Dither seed. Fixed by default so runs reproduce byte for byte.
+    #[arg(long = "dither-seed", default_value_t = dither::DEFAULT_SEED)]
+    dither_seed: u64,
+
+    /// Tape character: wow, flutter, head-gap HF loss, head bump. One
+    /// switch, so the clean path stays byte-identical when it is off.
+    #[arg(long)]
+    tape: bool,
+
+    /// Wow depth as peak speed deviation in percent. Implies --tape.
+    #[arg(long)]
+    wow: Option<f64>,
+
+    /// Flutter depth as peak speed deviation in percent. Implies --tape.
+    #[arg(long)]
+    flutter: Option<f64>,
+
+    /// Head-gap loss corner: `auto`, `off`, or a frequency in Hz at nominal
+    /// speed — it is scaled by the varispeed ratio. Implies --tape.
+    #[arg(long = "hf-rolloff")]
+    hf_rolloff: Option<String>,
+
+    /// Head bump height in dB, or `off`. Implies --tape.
+    #[arg(long = "head-bump")]
+    head_bump: Option<String>,
+
+    /// Micro-fade length in milliseconds. Defaults to 0.5 ms on a straight
+    /// cut and to none on a foldback, which is seamless already.
+    #[arg(long)]
+    fade: Option<f64>,
+
+    /// Never fade, whichever path is taken.
+    #[arg(long = "no-fade", conflicts_with = "fade")]
+    no_fade: bool,
+
+    /// Report what would happen and write nothing.
+    #[arg(long = "dry-run")]
+    dry_run: bool,
+
+    /// Write the loop even when the source is too short to fill it. The
+    /// result will drift against a sequencer — re-rendering is the fix.
+    #[arg(long = "allow-short")]
+    allow_short: bool,
+
+    /// Overwrite an existing output file.
+    #[arg(long)]
+    force: bool,
+
+    /// Ignore any `loopslcr.args` preset in the directory.
+    #[arg(long = "no-preset")]
+    no_preset: bool,
 }
 
 /// When to dither.
@@ -340,9 +401,8 @@ impl From<AlignArg> for Align {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    match run(cli) {
-        Ok(()) => ExitCode::SUCCESS,
+    match parse_with_preset().and_then(|(cli, note)| emit(run(cli, note)?)) {
+        Ok(code) => code,
         // Downstream closed the pipe — `loopslcr info x.wav | head` is a
         // normal way to use this, not a failure to report.
         Err(e) if is_broken_pipe(e.as_ref()) => ExitCode::SUCCESS,
@@ -366,7 +426,92 @@ fn is_broken_pipe(e: &(dyn Error + 'static)) -> bool {
     false
 }
 
-fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
+/// What a subcommand produced.
+struct Report {
+    text: String,
+    /// True when at least one file in a batch could not be processed. A
+    /// half-finished batch must not look like a success to whatever called it.
+    failed: bool,
+}
+
+impl From<String> for Report {
+    /// A single-file subcommand either produced its report or returned an error,
+    /// so there is no partial success to represent.
+    fn from(text: String) -> Self {
+        Report { text, failed: false }
+    }
+}
+
+/// One file's cut: the full report, and a line short enough for a batch listing.
+struct Cut {
+    text: String,
+    summary: String,
+}
+
+/// Where a cut's output goes.
+///
+/// Three cases rather than an `Option<PathBuf>`, because naming a directory and
+/// naming a file are different instructions: in a directory the filename still
+/// comes from the template, and the template needs the tempo the loop ends up
+/// at, which is not known until the varispeed has run.
+#[derive(Copy, Clone, Debug)]
+enum Out<'a> {
+    /// Named explicitly, template not used.
+    File(&'a Path),
+    /// Named by the template, in this directory.
+    Dir(&'a Path),
+    /// Named by the template, beside the source.
+    BesideSource,
+}
+
+/// Writes a report to stdout and turns it into an exit code.
+fn emit(report: Report) -> Result<ExitCode, Box<dyn Error>> {
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+    out.write_all(report.text.as_bytes())?;
+    out.flush()?;
+    Ok(if report.failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+/// Parses the command line, then re-parses it with the directory's preset
+/// spliced in.
+///
+/// Two passes because the preset's location is itself an argument: the file to
+/// cut names the directory to look in. The second parse is the one that counts,
+/// and it is the same parser, so a preset cannot express anything the command
+/// line could not.
+fn parse_with_preset() -> Result<(Cli, Option<String>), Box<dyn Error>> {
+    let argv: Vec<OsString> = std::env::args_os().collect();
+    let first = Cli::parse_from(&argv);
+
+    let dir = match &first.command {
+        Command::Cut { file, flags, .. } if !flags.no_preset => file.parent().map(Path::to_path_buf),
+        Command::Batch { dir, flags, .. } if !flags.no_preset => Some(dir.clone()),
+        _ => None,
+    };
+    let Some(dir) = dir else {
+        return Ok((first, None));
+    };
+    let Some(args) = preset::load(&dir)? else {
+        return Ok((first, None));
+    };
+
+    let note = format!(
+        "  preset       {} — {}\n",
+        dir.join(preset::FILE_NAME).display(),
+        args.iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    Ok((Cli::parse_from(preset::splice(&argv, args)), Some(note)))
+}
+
+fn run(cli: Cli, preset_note: Option<String>) -> Result<Report, Box<dyn Error>> {
     let text = match cli.command {
         Command::Info {
             file,
@@ -393,63 +538,26 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 !no_peak,
                 waveform,
             )?
+            .into()
         }
-        Command::Cut {
-            file,
-            out,
-            bpm,
-            bpm_from_name,
-            bars,
-            bars_from_name,
-            skip,
-            sig,
-            bpm_unit,
-            align,
-            workflow,
-            pitch,
-            target_bpm,
-            snap,
-            snap_window,
-            depth,
-            normalize,
-            dither,
-            dither_seed,
-            tape,
-            wow,
-            flutter,
-            hf_rolloff,
-            head_bump,
-            fade,
-            no_fade,
-            dry_run,
-            allow_short,
-            force,
-        } => run_cut(CutArgs {
-            file,
-            out,
-            bpm,
-            bpm_from_name,
-            bars,
-            bars_from_name,
-            skip,
-            sig,
-            bpm_unit,
-            align: align.into(),
-            workflow,
-            pitch,
-            target_bpm,
-            snap,
-            snap_window,
-            depth,
-            normalize,
-            dither,
-            dither_seed,
-            tape: resolve_tape(tape, wow, flutter, &hf_rolloff, &head_bump)?,
-            fade,
-            no_fade,
-            dry_run,
-            allow_short,
-            force,
+        Command::Cut { file, out, flags } => {
+            let where_to = out.as_deref().map_or(Out::BesideSource, Out::File);
+            run_cut(&file, where_to, &flags.resolve()?)?.text.into()
+        }
+        Command::Batch {
+            dir,
+            out_dir,
+            recursive,
+            jobs,
+            verbose,
+            flags,
+        } => batch::run(BatchArgs {
+            dir,
+            out_dir,
+            recursive,
+            jobs,
+            verbose,
+            settings: flags.resolve()?,
         })?,
         Command::Grid {
             bpm,
@@ -463,20 +571,30 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         } => {
             let skip = skip.unwrap_or(bars);
             let grid = Grid::new(bpm.with_unit(bpm_unit), sig, sr);
-            render_grid(&grid, skip, bars, align.into(), window)
+            render_grid(&grid, skip, bars, align.into(), window).into()
+        }
+        Command::Completions { shell } => {
+            let mut buffer = Vec::new();
+            clap_complete::generate(shell, &mut Cli::command(), "loopslcr", &mut buffer);
+            Report::from(String::from_utf8(buffer)?)
         }
     };
 
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-    out.write_all(text.as_bytes())?;
-    out.flush()?;
-    Ok(())
+    // The preset goes at the top of the report, never silently: a file that
+    // changes what the command does has to be visible in the command's output.
+    Ok(match preset_note {
+        Some(note) => Report {
+            text: note + &text.text,
+            ..text
+        },
+        None => text,
+    })
 }
 
-struct CutArgs {
-    file: PathBuf,
-    out: Option<PathBuf>,
+/// The cutting pipeline's settings, with every flag that needs parsing already
+/// resolved — so the per-file work does no argument validation at all and a bad
+/// `--pitch` fails once, before the first file is touched, rather than 279 times.
+struct Settings {
     bpm: Option<Tempo>,
     bpm_from_name: bool,
     bars: Option<u64>,
@@ -486,7 +604,7 @@ struct CutArgs {
     bpm_unit: BpmUnit,
     align: Align,
     workflow: PathArg,
-    pitch: Option<String>,
+    ratio: Option<Ratio>,
     target_bpm: Option<Tempo>,
     snap: bool,
     snap_window: u32,
@@ -502,14 +620,50 @@ struct CutArgs {
     force: bool,
 }
 
+impl CutFlags {
+    /// Validates and parses everything that can fail, once.
+    fn resolve(&self) -> Result<Settings, Box<dyn Error>> {
+        Ok(Settings {
+            bpm: self.bpm,
+            bpm_from_name: self.bpm_from_name,
+            bars: self.bars,
+            bars_from_name: self.bars_from_name,
+            skip: self.skip,
+            sig: self.sig,
+            bpm_unit: self.bpm_unit,
+            align: self.align.into(),
+            workflow: self.workflow,
+            ratio: self.pitch.as_deref().map(parse_pitch).transpose()?,
+            target_bpm: self.target_bpm,
+            snap: self.snap,
+            snap_window: self.snap_window,
+            depth: self.depth,
+            normalize: self.normalize,
+            dither: self.dither,
+            dither_seed: self.dither_seed,
+            tape: resolve_tape(
+                self.tape,
+                self.wow,
+                self.flutter,
+                &self.hf_rolloff,
+                &self.head_bump,
+            )?,
+            fade: self.fade,
+            no_fade: self.no_fade,
+            dry_run: self.dry_run,
+            allow_short: self.allow_short,
+            force: self.force,
+        })
+    }
+}
+
 /// Cuts a loop and writes it, or says what it would have written.
 ///
 /// Everything that could make the result silently wrong is a hard error here
 /// rather than a warning: a loop that is short drifts, and an output that
 /// overwrites a source is unrecoverable. Warnings are for things the ear can
 /// judge.
-fn run_cut(args: CutArgs) -> Result<String, Box<dyn Error>> {
-    let CutArgs { file, .. } = &args;
+fn run_cut(file: &Path, out: Out, args: &Settings) -> Result<Cut, Box<dyn Error>> {
     let named = |e: String| format!("{}: {e}", file.display());
 
     let bytes = std::fs::read(file).map_err(|e| named(e.to_string()))?;
@@ -553,7 +707,7 @@ fn run_cut(args: CutArgs) -> Result<String, Box<dyn Error>> {
     // file's own duration. No fixed default — `8` is right for the reference
     // render and wrong for four fifths of the archive.
     let from_length = analysis::guess_loop_bars(&grid, wav.frames());
-    let (bars, bars_source) = match (args.bars, naming_bars(&args, &name), from_length) {
+    let (bars, bars_source) = match (args.bars, naming_bars(args, &name), from_length) {
         (Some(b), _, _) => (b, BarsSource::Given),
         (None, Some(b), _) => (b, BarsSource::Filename),
         (None, None, Some(g)) => (g.bars, BarsSource::FileLength),
@@ -695,7 +849,7 @@ fn run_cut(args: CutArgs) -> Result<String, Box<dyn Error>> {
     // Varispeed, after the cut: the bar grid is exact in the original domain,
     // so resampling last costs one rounding of the output length instead of
     // compounding with the cut. The order is binding.
-    let ratio = resolve_ratio(&args, &grid, bars)?;
+    let ratio = resolve_ratio(args, &grid, bars)?;
     let final_tempo = ratio.resulting_tempo(tempo).map_err(|e| named(e.to_string()))?;
     if !ratio.is_unity() {
         let target = grid.resampled_length(bars, ratio) as usize;
@@ -812,15 +966,25 @@ fn run_cut(args: CutArgs) -> Result<String, Box<dyn Error>> {
     }
 
     // The output is named and tagged with the tempo it actually plays at.
-    let dest = args
-        .out
-        .clone()
-        .unwrap_or_else(|| default_output(file, &final_tempo, bars));
+    let dest = match out {
+        Out::File(path) => path.to_path_buf(),
+        Out::Dir(dir) => dir.join(default_name(file, &final_tempo, bars)),
+        Out::BesideSource => file.with_file_name(default_name(file, &final_tempo, bars)),
+    };
     writeln!(s, "  out          {}", dest.display())?;
+
+    // The one-line summary is assembled from the facts, not scraped back out of
+    // the report: a batch listing needs the tempo, length and destination, and
+    // the last line of the report happens to be none of those.
+    let summary = format!(
+        "{bars} bars at {final_tempo}, {} frames → {}",
+        cut_buffer.frames(),
+        dest.file_name().unwrap_or_default().to_string_lossy()
+    );
 
     if args.dry_run {
         writeln!(s, "  dry run — nothing written")?;
-        return Ok(s);
+        return Ok(Cut { text: s, summary: format!("{summary} (dry run)") });
     }
 
     // Refusing to overwrite the source is not the same check as refusing to
@@ -859,7 +1023,10 @@ fn run_cut(args: CutArgs) -> Result<String, Box<dyn Error>> {
     std::fs::write(&dest, &encoded).map_err(|e| format!("{}: {e}", dest.display()))?;
     writeln!(s, "  wrote        {} bytes, {}-bit", encoded.len(), args.depth.bits())?;
 
-    Ok(s)
+    Ok(Cut {
+        text: s,
+        summary: format!("{summary}, {}-bit", args.depth.bits()),
+    })
 }
 
 /// The varispeed ratio the flags ask for.
@@ -868,10 +1035,10 @@ fn run_cut(args: CutArgs) -> Result<String, Box<dyn Error>> {
 /// nearest at which the loop is a whole number of samples, reusing the same
 /// search that `loopslcr grid` prints. On its own — no pitch, no target — it
 /// makes an otherwise inexact loop exact for the price of a few cents.
-fn resolve_ratio(args: &CutArgs, grid: &Grid, bars: u64) -> Result<Ratio, Box<dyn Error>> {
+fn resolve_ratio(args: &Settings, grid: &Grid, bars: u64) -> Result<Ratio, Box<dyn Error>> {
     let source = grid.tempo;
-    let wanted = match (&args.pitch, args.target_bpm) {
-        (Some(text), _) => parse_pitch(text)?,
+    let wanted = match (args.ratio, args.target_bpm) {
+        (Some(ratio), _) => ratio,
         (None, Some(target)) => Ratio::from_tempi(source, target)?,
         (None, None) => Ratio::UNITY,
     };
@@ -923,7 +1090,7 @@ impl std::fmt::Display for BarsSource {
 }
 
 /// A loop length stated in the filename, when `--bars-from-name` asked for it.
-fn naming_bars(args: &CutArgs, name: &str) -> Option<u64> {
+fn naming_bars(args: &Settings, name: &str) -> Option<u64> {
     args.bars_from_name
         .then(|| naming::bars_from_name(name))
         .flatten()
@@ -975,8 +1142,9 @@ fn describe(w: Workflow) -> &'static str {
 }
 
 /// `{name}_{bpm}bpm_{bars}bars.wav`, beside the source.
-fn default_output(source: &Path, tempo: &Tempo, bars: u64) -> PathBuf {
-    let stem = source.file_stem().unwrap_or_default().to_string_lossy();
+fn default_name(source: &Path, tempo: &Tempo, bars: u64) -> String {
+    let name = source.file_name().unwrap_or_default().to_string_lossy();
+    let stem = naming::output_stem(&name);
     let bpm = tempo.value();
     // A fractional tempo has to survive into the name — `58.5` truncated to
     // `58` names a file that is not the file.
@@ -985,7 +1153,7 @@ fn default_output(source: &Path, tempo: &Tempo, bars: u64) -> PathBuf {
     } else {
         format!("{}", bpm.to_f64()).replace('.', "p")
     };
-    source.with_file_name(format!("{stem}_{bpm}bpm_{bars}bars.wav"))
+    format!("{stem}_{bpm}bpm_{bars}bars.wav")
 }
 
 /// Whether two paths name the same existing file.
