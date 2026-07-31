@@ -22,6 +22,8 @@ fun Waveform(
     channels: Int,
     frames: Long,
     region: LongRange?,
+    /** Where the preview is, as a fraction of the whole file, or null when stopped. */
+    playHead: Float? = null,
     modifier: Modifier = Modifier,
 ) {
     Canvas(modifier) {
@@ -70,6 +72,11 @@ fun Waveform(
             marker(size.width * (region.first.toFloat() / frames))
             marker(size.width * (region.last.toFloat() / frames))
         }
+
+        if (playHead != null) {
+            val x = size.width * playHead.coerceIn(0f, 1f)
+            drawRect(Palette.playHead, Offset(x - 1f, 0f), Size(3f, size.height))
+        }
     }
 }
 
@@ -86,6 +93,7 @@ object Palette {
     val outside = Color(0x99000000)
     val axis = Color(0xFF2A2A33)
     val marker = Color(0xFFF2F2F2)
+    val playHead = Color(0xFF4ADE80)
     val text = Color(0xFFE8E8EC)
     val dim = Color(0xFF8A8A96)
     val warn = Color(0xFFFFB020)

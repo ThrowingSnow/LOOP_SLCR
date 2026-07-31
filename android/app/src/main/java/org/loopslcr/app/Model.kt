@@ -122,6 +122,17 @@ data class Settings(
     val allowShort: Boolean = false,
     val snap: Boolean = false,
 ) {
+    /**
+     * Whether these settings describe the same loop as [other], ignoring speed.
+     *
+     * The preview exists so the speed can be changed without rebuilding
+     * anything; everything else — bars, skip, workflow, character — changes what
+     * is being played and does need a rebuild. This is the line between the two.
+     */
+    fun sameLoopAs(other: Settings): Boolean =
+        copy(speedMode = other.speedMode, semitones = other.semitones, targetBpm = other.targetBpm) ==
+            other
+
     fun toJson(): String {
         val o = JSONObject()
         when (speedMode) {

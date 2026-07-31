@@ -51,8 +51,11 @@ fun CutterScreen(
     plan: Plan?,
     busy: Busy,
     problem: String?,
+    playing: Boolean = false,
+    playHead: Float? = null,
     onOpen: () -> Unit,
     onExport: () -> Unit,
+    onPlay: () -> Unit = {},
     onChange: ((Settings) -> Settings) -> Unit,
     onDismissProblem: () -> Unit,
 ) {
@@ -88,9 +91,29 @@ fun CutterScreen(
                 channels = loaded.analysis.channels,
                 frames = loaded.analysis.frames,
                 region = plan?.let { it.regionStart..it.regionEnd },
+                playHead = playHead,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(150.dp),
+            )
+        }
+
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(onClick = onPlay, enabled = busy is Busy.Idle) {
+                Text(if (playing) "Stop" else "Play")
+            }
+            Text(
+                if (playing) {
+                    "the loop is playing — move the varispeed and it bends"
+                } else {
+                    "preview plays the cut at its own tempo"
+                },
+                color = Palette.dim,
+                fontSize = 11.sp,
             )
         }
 

@@ -8,8 +8,8 @@
 > read → cut → foldback → fade → varispeed → tape character → normalize → dither
 > → write, and `loopslcr batch` puts the 279-file archive through it in 1.3
 > seconds. M5 is under way: the Android toolchain is installed, `loopslcr-jni`
-> is done bar the preview engine, and the APK builds, installs and runs — the
-> cutter works offline end to end. Last updated 30.07.2026.
+> is done including the preview engine, and the APK builds, installs and runs —
+> the cutter works end to end and the loop can be ridden by ear. Last updated 30.07.2026.
 
 ## Vision
 
@@ -332,7 +332,7 @@ worth exactly as much as its regression check.
 - [x] `loopslcr-jni` cdylib, `cargo-ndk` integration
 - [x] Gradle ↔ cargo build wiring (`:app:cargoNdk`, inputs declared)
 - [x] JNI surface: `analyze`, `plan`, `process`, `peaks`, `version`
-- [ ] JNI surface: `previewCreate/Read/SetRatio/Seek/Destroy`
+- [x] JNI surface: `previewCreate/Read/SetRatio/Seek/Info/Destroy`
 - [x] Direct `ByteBuffer` transfer for PCM (no copies)
 - [x] Panic guard at every entry point, proved from Java on host *and* device
 - [x] SAF file picking (`ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT`), no broad permissions
@@ -360,11 +360,12 @@ worth exactly as much as its regression check.
   - [ ] Total duration for N bars
   - [ ] "→ send to Cutter" action
 - [ ] Shared ViewModel: BPM, signature, BPM unit, sample rate
-- [ ] **Preview engine**
-  - [ ] `AudioTrack` streaming from Rust variable-rate resampler
-  - [ ] Ratio glide via one-pole smoother in the audio thread (tape inertia)
-  - [ ] Lock-free ratio handoff (atomic)
-  - [ ] Seamless loop playback across the seam
+- [x] **Preview engine**
+  - [x] `AudioTrack` streaming from Rust variable-rate resampler
+  - [x] Ratio glide via one-pole smoother in the audio thread (tape inertia)
+  - [x] Lock-free ratio handoff (atomic)
+  - [x] Seamless loop playback across the seam
+  - [ ] Draggable play head (seek exists; nothing drives it from the waveform yet)
 - [x] Dark theme
 - [x] Instrumented tests: the engine on a real Android runtime, the screen rendered
 - [ ] GitHub Actions: signed release APK on tag push
@@ -410,7 +411,7 @@ worth exactly as much as its regression check.
 | M2 | v0.2 Varispeed, bit depth, dither, BPM tagging | **DONE** bar noise-shaped dither |
 | M3 | v0.3 Tape character with loop-periodic modulation | **DONE** |
 | M4 | v0.4 Batch processing, CLI feature-complete | **DONE** |
-| M5 | v1.0 Android APK, two tabs, tape-riding preview | **IN PROGRESS** — cutter runs; preview engine and calculator open |
+| M5 | v1.0 Android APK, two tabs, tape-riding preview | **IN PROGRESS** — cutter and preview run; calculator tab open |
 | M6 | v1.1 Saturation (oversampling + ADAA) | TODO |
 | M7 | v2.0 Slice export, Elektron export, desktop GUI | TODO |
 

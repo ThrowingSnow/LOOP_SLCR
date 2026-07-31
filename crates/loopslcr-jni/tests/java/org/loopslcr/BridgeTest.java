@@ -60,6 +60,45 @@ public final class BridgeTest {
         }
         check("the peaks contain signal", anySignal);
 
+        // --- preview ------------------------------------------------------
+        long preview = Native.previewCreate(Native.direct(wav), "200 loop.wav", "{}");
+        check("a preview handle is not zero", preview != 0);
+
+        String info = Native.previewInfo(preview);
+        check("the preview knows its format", info.contains("\"sampleRate\":8000")
+                && info.contains("\"channels\":2"));
+
+        // Interleaved floats into a direct buffer: the transfer an AudioTrack
+        // does thousands of times a minute, so it is the one worth checking.
+        java.nio.ByteBuffer block = java.nio.ByteBuffer
+                .allocateDirect(256 * 2 * 4)
+                .order(java.nio.ByteOrder.nativeOrder());
+        check("a block of 256 frames comes back", Native.previewRead(preview, block, 256) == 256);
+        java.nio.FloatBuffer floats = block.asFloatBuffer();
+        boolean audible = false;
+        for (int i = 0; i < 256 * 2; i++) {
+            float v = floats.get(i);
+            check("no preview sample is NaN", !Float.isNaN(v));
+            if (Math.abs(v) > 0.01f) audible = true;
+        }
+        check("the preview produced sound", audible);
+        check("the play head moved", Native.previewInfo(preview).contains("\"played\":256"));
+
+        Native.previewSetRatio(preview, 1.5);
+        Native.previewRead(preview, block, 256);
+        Native.previewSeek(preview, 0.0);
+        check("seeking put the head back", Native.previewInfo(preview).contains("\"position\":0.0"));
+
+        check("asking a buffer for more than it holds throws", throwsIllegalState(() ->
+                Native.previewRead(preview, block, 100_000)));
+        check("a zero handle throws rather than crashing", throwsIllegalState(() ->
+                Native.previewInfo(0)));
+
+        Native.previewDestroy(preview);
+        // Tearing down twice is what a UI does when it stops and then closes.
+        Native.previewDestroy(0);
+        check("the runtime survived the teardown", !Native.version().isEmpty());
+
         // --- errors -------------------------------------------------------
         check("a bad file throws", throwsIllegalState(() ->
                 Native.analyze(Native.direct("not a wave file".getBytes()), "x.wav")));

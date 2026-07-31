@@ -31,6 +31,35 @@ public final class Native {
     /** Waveform buckets: [c0min, c0max, c1min, c1max, ...] per bucket. */
     public static native float[] peaks(ByteBuffer audio, int buckets);
 
+    /**
+     * Opens a preview of the loop these parameters describe.
+     *
+     * <p>Returns an opaque handle, never zero on success. The varispeed in the
+     * parameters is deliberately <em>not</em> baked in — the rate is set on the
+     * handle instead, so riding it does not rebuild the loop.
+     */
+    public static native long previewCreate(ByteBuffer audio, String name, String paramsJson);
+
+    /**
+     * Fills a direct buffer with interleaved native-endian floats.
+     *
+     * <p>This is the call the audio thread makes. It neither allocates nor waits
+     * on anything the UI thread holds.
+     */
+    public static native int previewRead(long handle, ByteBuffer out, int frames);
+
+    /** Asks for a new speed. Lock-free; callable from any thread, at any time. */
+    public static native void previewSetRatio(long handle, double ratio);
+
+    /** Moves the play head, in source frames. Wraps. */
+    public static native void previewSeek(long handle, double frame);
+
+    /** Format, length and play head, as JSON. */
+    public static native String previewInfo(long handle);
+
+    /** Frees the handle. It must not be used again; destroying zero is a no-op. */
+    public static native void previewDestroy(long handle);
+
     /** Panics on purpose, so the guard can be proved from this side. */
     public static native void panicOnPurpose();
 

@@ -1,0 +1,184 @@
+package org.loopslcr.app
+
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
+import android.os.Process
+import org.json.JSONObject
+import org.loopslcr.Native
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+
+/**
+ * The loop, playing, at a speed that can be changed while it plays.
+ *
+ * # The shape of it
+ *
+ * One thread does nothing but ask Rust for a block of floats and hand it to
+ * `AudioTrack`. Everything else — starting, stopping, changing the rate —
+ * happens on whatever thread called, and reaches the audio thread through the
+ * native handle's atomics rather than through anything that could make it wait.
+ *
+ * # The one rule
+ *
+ * **The handle is destroyed only after the audio thread has stopped.** A read
+ * from a freed handle is undefined behaviour, and the window is exactly as long
+ * as one block — which is to say it would happen rarely, on a device, in a way
+ * that looks like a random crash. So [stop] joins before it frees, every time.
+ */
+class PreviewPlayer {
+    private var handle = 0L
+    private var track: AudioTrack? = null
+    private var pump: Thread? = null
+
+    @Volatile
+    private var running = false
+
+    val isPlaying: Boolean get() = running
+
+    /** Frames per block. See [blockFrames] for why it is not simply "small". */
+    private var blockFrames = 0
+
+    /**
+     * Opens a preview and starts playing it.
+     *
+     * Returns the error if there is one, rather than throwing: a preview that
+     * cannot open is a message in the UI, not a crash.
+     */
+    fun start(bytes: ByteArray, name: String, settings: Settings, ratio: Double): String? {
+        stop()
+        return try {
+            handle = Native.previewCreate(Native.direct(bytes), name, settings.toJson())
+            val info = JSONObject(Native.previewInfo(handle))
+            val channels = info.getInt("channels")
+            val rate = info.getInt("sampleRate")
+            Native.previewSetRatio(handle, ratio)
+
+            val mask = when (channels) {
+                1 -> AudioFormat.CHANNEL_OUT_MONO
+                2 -> AudioFormat.CHANNEL_OUT_STEREO
+                else -> throw IllegalStateException("$channels channels is not something to play")
+            }
+            val format = AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                .setSampleRate(rate)
+                .setChannelMask(mask)
+                .build()
+
+            // The device's own minimum, doubled. The minimum is what it takes
+            // not to underrun when nothing else is happening; on a phone that is
+            // optimistic, and an underrun in a preview is a click at a random
+            // place in the loop — the one artefact this whole tool exists to
+            // avoid, arriving from the playback path instead of the audio.
+            val minBytes = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_FLOAT)
+            val bytesPerFrame = channels * 4
+            val trackBytes = maxOf(minBytes * 2, bytesPerFrame * 2048)
+            blockFrames = (trackBytes / bytesPerFrame / 4).coerceAtLeast(128)
+
+            val audio = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build(),
+                )
+                .setAudioFormat(format)
+                .setBufferSizeInBytes(trackBytes)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build()
+
+            track = audio
+            audio.play()
+            running = true
+            pump = Thread({ pump(channels) }, "loopslcr-preview").also { it.start() }
+            null
+        } catch (e: Exception) {
+            stop()
+            e.message ?: "the preview could not start"
+        }
+    }
+
+    /**
+     * The audio thread.
+     *
+     * Nothing in here allocates after the first line. The block buffer is direct
+     * so Rust writes into it in place, and it is reused for the life of the
+     * playback: allocating per block would put the garbage collector on the one
+     * thread that cannot afford to be paused.
+     */
+    private fun pump(channels: Int) {
+        Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+        val block = ByteBuffer
+            .allocateDirect(blockFrames * channels * 4)
+            .order(ByteOrder.nativeOrder())
+        val audio = track ?: return
+
+        while (running) {
+            val frames = try {
+                Native.previewRead(handle, block, blockFrames)
+            } catch (_: IllegalStateException) {
+                break
+            }
+            if (frames <= 0) break
+
+            val bytes = frames * channels * 4
+            block.position(0)
+            block.limit(bytes)
+            // WRITE_BLOCKING is what makes this loop self-pacing: it returns
+            // when the device has room, so the thread runs at exactly the rate
+            // the hardware consumes and needs no clock of its own.
+            if (audio.write(block, bytes, AudioTrack.WRITE_BLOCKING) < 0) break
+            block.clear()
+        }
+    }
+
+    /** Asks for a new speed. Reached over the glide, not immediately. */
+    fun setRatio(ratio: Double) {
+        if (handle != 0L) {
+            runCatching { Native.previewSetRatio(handle, ratio) }
+        }
+    }
+
+    fun seek(frame: Double) {
+        if (handle != 0L) {
+            runCatching { Native.previewSeek(handle, frame) }
+        }
+    }
+
+    /** Where the play head is, in source frames, or null when not playing. */
+    fun position(): Double? {
+        if (handle == 0L) return null
+        return runCatching { JSONObject(Native.previewInfo(handle)).getDouble("position") }
+            .getOrNull()
+    }
+
+    /**
+     * Stops and frees, in that order.
+     *
+     * Idempotent, because a UI stops on pause, on a new file and on close, and
+     * two of those regularly happen together.
+     */
+    fun stop() {
+        running = false
+        pump?.let {
+            // Bounded: the thread is at most one blocking write from noticing,
+            // and a write of one block is milliseconds. An unbounded join here
+            // would hang the UI thread on a device whose audio path has wedged.
+            it.join(2_000)
+        }
+        pump = null
+
+        track?.let {
+            runCatching { it.pause() }
+            runCatching { it.flush() }
+            runCatching { it.release() }
+        }
+        track = null
+
+        // Only now: the audio thread is provably no longer reading it.
+        if (handle != 0L) {
+            runCatching { Native.previewDestroy(handle) }
+            handle = 0L
+        }
+    }
+}

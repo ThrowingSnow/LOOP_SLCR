@@ -236,8 +236,20 @@ surface of five calls. Nothing about timing, cutting or resampling is
 reimplemented in Kotlin — the UI decides what to ask for and shows what came
 back, and that is all it does.
 
-Still to come: the preview engine (`AudioTrack` streaming from a variable-rate
-resampler, so the varispeed can be ridden by ear) and the calculator tab.
+**The loop can be ridden by ear.** Press play and the cut plays at its own
+tempo; move the varispeed and the pitch bends rather than jumping, because the
+rate is approached through a one-pole smoother standing in for the inertia of a
+reel. The audio thread reads blocks straight out of Rust into a direct buffer,
+and the rate reaches it through a single atomic — nothing the UI does can make
+it wait, and nothing it does can make the UI wait.
+
+The preview deliberately does *not* bake the varispeed into the loop: the
+pipeline runs with the ratio neutralised, so changing speed costs an atomic
+store rather than a re-cut. Tape character is applied at unity, which makes a
+heavily transposed preview slightly brighter than the render, where the filters
+sit lower.
+
+Still to come: the calculator tab.
 
 Build and test it with [`docs/TOOLCHAIN.md`](docs/TOOLCHAIN.md).
 
@@ -322,3 +334,22 @@ Full detail in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 Deliberately the **smallest** project in the family: finishable scope, an immediately
 useful CLI stage, and a real archive to validate against on day one.
+
+---
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([`LICENSE-APACHE`](LICENSE-APACHE) or
+  <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([`LICENSE-MIT`](LICENSE-MIT) or
+  <http://opensource.org/licenses/MIT>)
+
+at your option.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.

@@ -98,6 +98,80 @@ class EngineTest {
     }
 
     @Test
+    fun a_preview_produces_sound_and_frees_cleanly() {
+        val handle = org.loopslcr.Native.previewCreate(org.loopslcr.Native.direct(wav), name, "{}")
+        assertTrue(handle != 0L)
+        try {
+            val info = org.json.JSONObject(org.loopslcr.Native.previewInfo(handle))
+            assertEquals(2, info.getInt("channels"))
+            assertEquals(RATE, info.getInt("sampleRate"))
+
+            val block = ByteBuffer.allocateDirect(256 * 2 * 4).order(ByteOrder.nativeOrder())
+            assertEquals(256, org.loopslcr.Native.previewRead(handle, block, 256))
+            val floats = block.asFloatBuffer()
+            var audible = false
+            for (i in 0 until 256 * 2) {
+                val v = floats.get(i)
+                assertFalse(v.isNaN())
+                if (kotlin.math.abs(v) > 0.01f) audible = true
+            }
+            assertTrue("the preview produced silence", audible)
+        } finally {
+            org.loopslcr.Native.previewDestroy(handle)
+        }
+    }
+
+    @Test
+    fun the_preview_plays_the_whole_loop_and_comes_back_round() {
+        // Reading exactly twice the loop length must land back where it started.
+        // A preview that drifts by a sample per pass is a preview that lies
+        // about the one property the tool exists to guarantee.
+        val handle = org.loopslcr.Native.previewCreate(org.loopslcr.Native.direct(wav), name, "{}")
+        try {
+            val frames = org.json.JSONObject(org.loopslcr.Native.previewInfo(handle)).getLong("frames")
+            val block = ByteBuffer.allocateDirect(1024 * 2 * 4).order(ByteOrder.nativeOrder())
+            var done = 0L
+            while (done < frames * 2) {
+                val want = minOf(1024L, frames * 2 - done).toInt()
+                done += org.loopslcr.Native.previewRead(handle, block, want)
+            }
+            val position = org.json.JSONObject(org.loopslcr.Native.previewInfo(handle))
+                .getDouble("position")
+            assertTrue("came back to $position", kotlin.math.abs(position) < 1e-6)
+        } finally {
+            org.loopslcr.Native.previewDestroy(handle)
+        }
+    }
+
+    @Test
+    fun a_dead_handle_throws_rather_than_corrupting_anything() {
+        val e = runCatching { org.loopslcr.Native.previewInfo(0) }.exceptionOrNull()
+        assertTrue(e is IllegalStateException)
+        // Freeing nothing is what a UI does when it stops twice.
+        org.loopslcr.Native.previewDestroy(0)
+        assertTrue(Engine.version.isNotEmpty())
+    }
+
+    @Test
+    fun the_player_starts_stops_and_can_be_stopped_twice() {
+        // AudioTrack on an emulator has no real output device worth trusting,
+        // so what is checked is the lifecycle: it starts without throwing, and
+        // stopping joins the audio thread before freeing the handle. Getting
+        // that order wrong is a use-after-free that would only show as a random
+        // crash on a device.
+        val player = PreviewPlayer()
+        val problem = player.start(wav, name, Settings(), 1.0)
+        assertEquals(null, problem)
+        assertTrue(player.isPlaying)
+        Thread.sleep(200)
+        player.setRatio(1.5)
+        Thread.sleep(100)
+        player.stop()
+        assertFalse(player.isPlaying)
+        player.stop()
+    }
+
+    @Test
     fun a_panic_becomes_an_exception_here_too() {
         // The guard was proved on the host. Android uses a different runtime and
         // a different unwinder, so the claim is worth making again where it will

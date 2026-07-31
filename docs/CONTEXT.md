@@ -825,3 +825,43 @@ Ein Sweep mit `loopslcr info` über alle 279 Einträge (Details siehe
 - **Der Instrumented-Test prüft auch Invariante 4 auf dem Gerät:** zweimal
   dieselben Einstellungen, bitgleiche Bytes. Reproduzierbarkeit, die nur auf der
   Maschine gilt, die sie gemessen hat, ist keine.
+
+---
+
+## 13. Preview-Engine — die Entscheidungen
+
+- **Der Varispeed wird bewusst *nicht* eingebacken.** `preview::create` setzt
+  `ratio`, `target_bpm` und `snap` auf neutral, bevor die Pipeline läuft. Sonst
+  müsste bei jeder Fingerbewegung der ganze Loop neu geschnitten und resampelt
+  werden — das genaue Gegenteil dessen, wofür eine Vorschau da ist.
+- **Tape-Character läuft dagegen mit, bei Unity.** Der Export legt ihn bei der
+  Endgeschwindigkeit an, wo die Filter tiefer sitzen. Eine stark transponierte
+  Vorschau ist also etwas heller als das Rendering. Das zu benennen ist besser,
+  als es zu verschweigen oder bei jedem Zug neu zu bauen.
+- **Zwei Kanäle zwischen den Threads, absichtlich asymmetrisch.** UI → Audio ist
+  ein Atomic (`set_ratio` speichert `f64`-Bits und kehrt zurück, nie blockierend).
+  Audio → UI sind zwei weitere Atomics für Position und gespielte Frames, damit
+  die UI einen Zeiger zeichnen kann, ohne den Audio-Thread nach irgendetwas zu
+  fragen. `Relaxed` reicht überall: die Werte stehen für sich, es gibt nichts,
+  wogegen sie geordnet werden müssten.
+- **Der Mutex um `Preview` ist unumstritten by construction.** Nur der lesende
+  Thread nimmt ihn. Er steht da, damit der Typ sicheres Rust ist statt einer
+  `UnsafeCell` mit Kommentar — Kosten: ein Atomic-Exchange pro Block, nicht pro
+  Sample.
+- **Die Reihenfolge beim Stoppen ist die kritische Stelle.** `stop()` joint den
+  Audio-Thread, *bevor* es `previewDestroy` ruft. Andersherum wäre es ein
+  Use-after-free mit genau einem Block Fensterbreite — also selten, auf einem
+  Gerät, und sähe aus wie ein Zufallscrash. Der Join ist auf 2 s begrenzt: ein
+  unbegrenzter würde den UI-Thread aufhängen, wenn der Audiopfad klemmt.
+- **`WRITE_BLOCKING` taktet die Schleife selbst.** `AudioTrack.write` kehrt
+  zurück, wenn das Gerät Platz hat — der Thread läuft also exakt im Tempo der
+  Hardware und braucht keine eigene Uhr.
+- **Position wird pro Sample gewrappt, nicht pro Block.** Bei 48 kHz würde eine
+  über eine Stunde akkumulierende Float-Position Nachkommastellen verlieren, und
+  ausgerechnet an der Naht wäre das hörbar.
+- **Acht Sinc-Taps statt zweiunddreißig.** Der Stoppband fällt von etwa −90 dB
+  auf etwa −60, was unter einem Drumloop nicht hörbar ist, und kostet ein
+  Viertel der Arbeit pro Sample. Der Offline-Pfad hat keine Deadline, dieser hier
+  schon.
+- **Die Glide-Zeit von 120 ms ist ein Gefühl, keine Messung.** Bandmaschinen
+  streuen weit stärker. Sie ist Parameter, damit man mit ihr streiten kann.

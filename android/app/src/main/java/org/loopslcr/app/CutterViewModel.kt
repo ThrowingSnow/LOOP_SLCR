@@ -55,6 +55,83 @@ class CutterViewModel : ViewModel() {
 
     private var replan: Job? = null
 
+    private val player = PreviewPlayer()
+    private val _playing = MutableStateFlow(false)
+    val playing: StateFlow<Boolean> = _playing.asStateFlow()
+
+    /** The settings the running preview was built from, to know when to rebuild. */
+    private var playingSettings: Settings? = null
+
+    override fun onCleared() {
+        player.stop()
+        super.onCleared()
+    }
+
+    /**
+     * Starts or stops the preview.
+     *
+     * Starting is not instant — the pipeline runs first — so it happens off the
+     * main thread like everything else that touches the engine.
+     */
+    fun togglePlay() {
+        if (_playing.value) {
+            player.stop()
+            _playing.value = false
+            playingSettings = null
+            return
+        }
+        val file = _loaded.value ?: return
+        val wanted = _settings.value
+        viewModelScope.launch {
+            _busy.value = Busy.Working("starting the preview")
+            val ratio = _plan.value?.ratio ?: 1.0
+            val problem = withContext(Dispatchers.Default) {
+                player.start(file.bytes, file.name, wanted, ratio)
+            }
+            _busy.value = Busy.Idle
+            if (problem == null) {
+                _playing.value = true
+                playingSettings = wanted
+            } else {
+                _problem.value = problem
+            }
+        }
+    }
+
+    /** Where the play head is, for a UI that wants to draw it. */
+    fun playPosition(): Double? = player.position()
+
+    /**
+     * Keeps a running preview in step with the settings.
+     *
+     * A change of speed is pushed to the handle and glides. Anything else
+     * changes what is being played, so the preview is rebuilt — silently, since
+     * the user did not ask for a stop, they asked for four bars instead of eight.
+     */
+    private fun followPreview(plan: Plan?) {
+        if (!_playing.value) return
+        val wanted = _settings.value
+        val built = playingSettings
+        if (built != null && !built.sameLoopAs(wanted)) {
+            val file = _loaded.value ?: return
+            viewModelScope.launch {
+                val ratio = plan?.ratio ?: 1.0
+                val problem = withContext(Dispatchers.Default) {
+                    player.start(file.bytes, file.name, wanted, ratio)
+                }
+                if (problem == null) {
+                    playingSettings = wanted
+                } else {
+                    _playing.value = false
+                    playingSettings = null
+                    _problem.value = problem
+                }
+            }
+        } else {
+            player.setRatio(plan?.ratio ?: 1.0)
+        }
+    }
+
     fun dismissProblem() {
         _problem.value = null
     }
@@ -66,6 +143,11 @@ class CutterViewModel : ViewModel() {
 
     fun open(name: String, bytes: ByteArray) {
         viewModelScope.launch {
+            // A new file is a different loop; whatever was playing is not it.
+            player.stop()
+            _playing.value = false
+            playingSettings = null
+
             _busy.value = Busy.Working("reading $name")
             try {
                 val loaded = withContext(Dispatchers.Default) {
@@ -113,6 +195,7 @@ class CutterViewModel : ViewModel() {
                 }
                 _plan.value = plan
                 _problem.value = null
+                followPreview(plan)
             } catch (e: Exception) {
                 _plan.value = null
                 _problem.value = e.message ?: "the settings do not describe a cut"

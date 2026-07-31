@@ -18,6 +18,7 @@ pub mod fade;
 pub mod filter;
 pub mod foldback;
 pub mod gain;
+pub mod preview;
 pub mod resample;
 pub mod tape;
 
@@ -27,5 +28,6 @@ pub use fade::{Fade, FadeShape};
 pub use filter::Filter;
 pub use foldback::{foldback, Foldback};
 pub use gain::Peak;
+pub use preview::Preview;
 pub use resample::{resample, Resampler};
 pub use tape::{Tape, TapeParams};

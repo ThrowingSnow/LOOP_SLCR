@@ -8,9 +8,15 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModelProvider
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 /**
  * The one activity.
@@ -71,6 +77,28 @@ class MainActivity : ComponentActivity() {
                 val plan by model.plan.collectAsState()
                 val busy by model.busy.collectAsState()
                 val problem by model.problem.collectAsState()
+                val playing by model.playing.collectAsState()
+
+                // Polled rather than pushed. The audio thread publishes its
+                // position to an atomic and must not be made to notify anyone;
+                // asking it thirty times a second is both cheaper and, for a
+                // moving cursor, indistinguishable.
+                var head by remember { mutableStateOf<Float?>(null) }
+                LaunchedEffect(playing, plan, loaded) {
+                    val file = loaded
+                    val where = plan
+                    if (!playing || file == null || where == null || file.analysis.frames == 0L) {
+                        head = null
+                        return@LaunchedEffect
+                    }
+                    while (isActive) {
+                        val position = model.playPosition()
+                        head = position?.let {
+                            ((where.regionStart + it) / file.analysis.frames).toFloat()
+                        }
+                        delay(33)
+                    }
+                }
 
                 CutterScreen(
                     loaded = loaded,
@@ -78,6 +106,9 @@ class MainActivity : ComponentActivity() {
                     plan = plan,
                     busy = busy,
                     problem = problem,
+                    playing = playing,
+                    playHead = head,
+                    onPlay = { model.togglePlay() },
                     onOpen = {
                         // Not `audio/*`: a WAVE file that a device has decided is
                         // `application/octet-stream` would be unpickable, and the
