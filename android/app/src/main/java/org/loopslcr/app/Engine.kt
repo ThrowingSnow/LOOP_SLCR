@@ -13,15 +13,9 @@ import java.nio.ByteBuffer
  * decides what a failure looks like to the UI.
  */
 object Engine {
-    /**
-     * Loaded once, when the object is first touched, and deliberately not in a
-     * `try`. If the library is missing the app is not degraded, it is absent —
-     * a crash on the first screen says so more clearly than a UI that offers
-     * buttons which cannot work.
-     */
-    init {
-        System.loadLibrary("loopslcr_jni")
-    }
+    // The library is loaded by `Native`'s own static initialiser, not here.
+    // Loading it in this object meant a caller that reached `Native` without
+    // going through `Engine` — the calculator does — found no implementation.
 
     val version: String get() = Native.version()
 

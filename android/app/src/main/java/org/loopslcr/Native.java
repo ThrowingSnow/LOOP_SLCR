@@ -15,6 +15,24 @@ import java.nio.ByteBuffer;
  * were panics on the Rust side. Nothing unwinds across the boundary.
  */
 public final class Native {
+    /**
+     * Loads the library when this class is first touched.
+     *
+     * <p>It belongs here, on the class that declares the methods, rather than on
+     * whichever wrapper happened to be written first: any caller reaching a
+     * native method has by definition initialised this class, so there is no
+     * path that can forget. It used to live in a Kotlin object, and a second
+     * caller that did not go through that object found the gap immediately —
+     * as an {@code UnsatisfiedLinkError} at the first call, not at startup.
+     *
+     * <p>Deliberately not wrapped in a {@code try}: without the library the app
+     * is not degraded, it is absent, and failing at class load says so more
+     * clearly than a screen full of controls that cannot work.
+     */
+    static {
+        System.loadLibrary("loopslcr_jni");
+    }
+
     private Native() {}
 
     public static native String version();
@@ -30,6 +48,15 @@ public final class Native {
 
     /** Waveform buckets: [c0min, c0max, c1min, c1max, ...] per bucket. */
     public static native float[] peaks(ByteBuffer audio, int buckets);
+
+    /**
+     * The calculator: beat and bar lengths and the note-value table, as JSON.
+     *
+     * <p>Native rather than Kotlin arithmetic on purpose. Both tabs then read
+     * their numbers off the same grid, and the calculator cannot drift away from
+     * the cutter it sits beside.
+     */
+    public static native String calculate(String paramsJson);
 
     /**
      * Opens a preview of the loop these parameters describe.

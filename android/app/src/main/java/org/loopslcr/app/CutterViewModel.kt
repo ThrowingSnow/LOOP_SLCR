@@ -55,6 +55,57 @@ class CutterViewModel : ViewModel() {
 
     private var replan: Job? = null
 
+    // --- the calculator tab ------------------------------------------------
+    //
+    // It lives in the same view model rather than its own, because the two tabs
+    // share facts: a loaded file's tempo and sample rate seed the calculator,
+    // and a tempo worked out over there is meant to be sent back here.
+
+    private val _calculator = MutableStateFlow(CalculatorSettings())
+    val calculator: StateFlow<CalculatorSettings> = _calculator.asStateFlow()
+
+    private val _sums = MutableStateFlow<Sums?>(null)
+    val sums: StateFlow<Sums?> = _sums.asStateFlow()
+
+    private val _calculatorProblem = MutableStateFlow<String?>(null)
+    val calculatorProblem: StateFlow<String?> = _calculatorProblem.asStateFlow()
+
+    init {
+        recalculate()
+    }
+
+    fun updateCalculator(change: (CalculatorSettings) -> CalculatorSettings) {
+        _calculator.update(change)
+        recalculate()
+    }
+
+    /**
+     * Sends the calculator's tempo to the cutter as a varispeed target.
+     *
+     * The one direction that means something: the calculator is where you work
+     * out what tempo you want, and the cutter is where a loop is made to arrive
+     * at it.
+     */
+    fun sendTempoToCutter() {
+        val bpm = _calculator.value.bpm.toDoubleOrNull() ?: return
+        update { it.copy(speedMode = SpeedMode.TargetBpm, targetBpm = bpm) }
+    }
+
+    private fun recalculate() {
+        // Exact rational arithmetic over eighteen note values costs microseconds
+        // and allocates one string. Pushing it to another thread would add more
+        // latency in scheduling than it removes in work.
+        Calculator.compute(_calculator.value)
+            .onSuccess {
+                _sums.value = it
+                _calculatorProblem.value = null
+            }
+            .onFailure {
+                _sums.value = null
+                _calculatorProblem.value = it.message ?: "those numbers do not describe a grid"
+            }
+    }
+
     private val player = PreviewPlayer()
     private val _playing = MutableStateFlow(false)
     val playing: StateFlow<Boolean> = _playing.asStateFlow()
@@ -158,6 +209,17 @@ class CutterViewModel : ViewModel() {
                 // A file usually names its own length; starting from what it
                 // says beats starting from a guess the user then has to undo.
                 _settings.value = Settings()
+
+                // The calculator follows the file it was opened next to. Its
+                // defaults are a guess; the file is a fact.
+                _calculator.update { settings ->
+                    settings.copy(
+                        bpm = loaded.analysis.tempo?.let(::trim) ?: settings.bpm,
+                        sampleRate = loaded.analysis.sampleRate,
+                        bars = loaded.analysis.loopBars ?: settings.bars,
+                    )
+                }
+                recalculate()
                 _plan.value = null
                 schedulePlan(immediately = true)
             } catch (e: Exception) {

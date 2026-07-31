@@ -865,3 +865,36 @@ Ein Sweep mit `loopslcr info` über alle 279 Einträge (Details siehe
   schon.
 - **Die Glide-Zeit von 120 ms ist ein Gefühl, keine Messung.** Bandmaschinen
   streuen weit stärker. Sie ist Parameter, damit man mit ihr streiten kann.
+
+---
+
+## 14. Calculator-Tab — warum nativ
+
+- **Kein Rechenschritt liegt in Kotlin.** Der Tab fragt Rust und stellt die
+  Antwort dar. Eine Nachimplementierung hätte eine Weile übereingestimmt und
+  dann, bei irgendeinem Tempo, das niemand getestet hat, still nicht mehr — und
+  genau darin richtig zu sein ist die ganze Aufgabe.
+- **`Grid::seconds_per_whole_notes` ist der gemeinsame Ausdruck.** Ein Takt ist
+  `whole_notes_per_bar` davon, ein Notenwert sein eigener Bruchteil einer ganzen
+  Note. Punktierung ist ×3/2, Triole ×2/3, beides exakt. So kommen beide Tabs
+  über dieselbe Formel zu ihren Zahlen statt über zwei, die sich ähneln.
+- **Ein Test hat einen echten Unterschied aufgedeckt:** 16 Takte ab null runden
+  auf 1 644 117, der 8-Takt-Loop des Cutters ab Takt 8 endet auf 1 644 116.
+  Beides stimmt — `Align::Loop` macht den Loop `round(8 · spb)` lang ab einem
+  separat gerundeten Start, statt die Differenz zweier gerundeter Taktlinien zu
+  nehmen. Das eine Sample Unterschied *ist* die Alignment-Entscheidung.
+- **Die Sample-Genauigkeit pro Zeile ist der einzige Eintrag, der keine
+  Dekoration ist.** Eine Delayzeit, die auf einem ganzen Sample landet, bleibt
+  beliebig lange im Raster; eine andere driftet heraus. Bei 103 BPM ist keine
+  einzige Zeile exakt, und das zu sehen ist der Zweck.
+- **Der JSON-*Writer* kann jetzt Arrays, der *Parser* nicht.** Eine Tabelle ist
+  nun mal eine Tabelle; sie in `note.16.ms`-Schlüssel zu flachklopfen hieße,
+  Struktur in Namen zu kodieren — wovor ein selbstbeschreibendes Format gerade
+  schützen soll. Die Eingaberichtung bleibt flach, der Parser bleibt eine
+  Grammatik, die man vollständig implementieren kann. Rust liest die eigene
+  Ausgabe nie zurück; der Empfänger ist `org.json`.
+- **`System.loadLibrary` gehört in `Native`, nicht in einen Kotlin-Wrapper.**
+  Der Rechner erreicht `Native`, ohne je `Engine` zu berühren — und fand die
+  Lücke sofort, als `UnsatisfiedLinkError` beim ersten Aufruf. Jetzt lädt der
+  statische Initialisierer der Klasse, die die Methoden deklariert; damit gibt
+  es keinen Pfad, der es vergessen kann.

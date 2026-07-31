@@ -249,7 +249,18 @@ store rather than a re-cut. Tape character is applied at unity, which makes a
 heavily transposed preview slightly brighter than the render, where the filters
 sit lower.
 
-Still to come: the calculator tab.
+**The calculator tab does no arithmetic.** It asks Rust and lays the answer out.
+Beat and bar lengths, the note-value table from 1/1 to 1/32 with dotted and
+triplet rows, in milliseconds, hertz and **samples** — and each row marked for
+whether it lands on a whole sample, because a delay time that does not drifts
+out of the grid over a long loop. At 103 BPM and 44.1 kHz it reports 8 bars as
+822 058 samples, which is exactly what the cutter cuts.
+
+A reimplementation in Kotlin would have agreed for a while and then, at some
+tempo nobody tested, quietly not — and being right about exactly this is the
+whole job.
+
+Still to come: draggable cut markers and a signed release build.
 
 Build and test it with [`docs/TOOLCHAIN.md`](docs/TOOLCHAIN.md).
 

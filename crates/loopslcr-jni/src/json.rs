@@ -15,11 +15,16 @@
 //!
 //! # Why hand-written
 //!
-//! Because this is a *flat* object of numbers, booleans and a handful of fixed
-//! keywords — no nesting, no arrays, no user-supplied strings. That is a small
-//! enough grammar to implement completely, which is the only condition under
-//! which hand-rolling a standard format is honest. String *values* are escaped
-//! properly all the same, since a filename could reach one later.
+//! Because the *input* is a flat object of numbers, booleans and a handful of
+//! fixed keywords — no nesting, no arrays, no user-supplied strings. That is a
+//! small enough grammar to implement completely, which is the only condition
+//! under which hand-rolling a standard format is honest. String *values* are
+//! escaped properly all the same, since a filename could reach one later.
+//!
+//! The **writer** goes one step further and can emit an array of objects, for
+//! the note-value table, which is genuinely tabular. That does not widen
+//! [`parse`]: nothing in Rust reads this side's output back, and the receiver is
+//! `org.json` — a whole parser, not this one.
 //!
 //! This lives in the JNI crate rather than the core: the core has no wire
 //! format and should not grow one.
@@ -86,6 +91,31 @@ impl Object {
                 self
             }
         }
+    }
+
+    /// An array of objects, for the one result that is genuinely a table.
+    ///
+    /// The note-value chart is eighteen rows of the same five columns.
+    /// Flattening it into `note.16.ms`-style keys would encode structure in the
+    /// spelling of names, which is the thing a self-describing format is for
+    /// avoiding.
+    ///
+    /// This widens what the **writer** emits, not what [`parse`] accepts.
+    /// Parameters coming the other way stay flat, and the parser stays a
+    /// grammar small enough to implement completely — which was the condition
+    /// that made hand-rolling honest in the first place. Nothing in Rust ever
+    /// reads this back; the receiver is `org.json`, which is a whole parser.
+    pub fn rows(&mut self, key: &str, rows: &[Object]) -> &mut Self {
+        let mut text = String::from("[");
+        for (i, row) in rows.iter().enumerate() {
+            if i > 0 {
+                text.push(',');
+            }
+            text.push_str(&row.render());
+        }
+        text.push(']');
+        self.0.insert(key.to_string(), text);
+        self
     }
 
     pub fn render(&self) -> String {

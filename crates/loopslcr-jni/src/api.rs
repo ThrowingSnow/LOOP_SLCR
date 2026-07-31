@@ -12,7 +12,8 @@
 use loopslcr_core::analysis::Peaks;
 use loopslcr_core::ops::tape::TapeParams;
 use loopslcr_core::pipeline::{self, BarsSource, Params, TempoSource};
-use loopslcr_core::timing::{Align, BpmUnit, Ratio, Tempo, TimeSignature};
+use loopslcr_core::rational::Rational;
+use loopslcr_core::timing::{note, Align, BpmUnit, Grid, Ratio, Tempo, TimeSignature};
 use loopslcr_core::wav::{write, BitDepth, Metadata, Wav, WriteSpec};
 use loopslcr_core::{naming, Tail, Workflow};
 
@@ -173,6 +174,125 @@ pub fn plan(bytes: &[u8], name: &str, params: &str) -> Result<String, String> {
         .maybe_number("normalizeGain", outcome.normalized.map(|(g, _)| g))
         .bool("dithered", outcome.dither.is_some());
     Ok(out.render())
+}
+
+/// The calculator screen, computed rather than looked up.
+///
+/// Takes a tempo, a signature, a BPM unit, a sample rate and a bar count, and
+/// returns everything that follows from them — beat and bar lengths, the total
+/// duration, and the note-value table.
+///
+/// **This exists so the calculator is not a second source of truth.** Every
+/// number here comes out of the same [`Grid`](loopslcr_core::timing::Grid) the
+/// cutter uses, through the same expression. A tab that did its own arithmetic
+/// in Kotlin would eventually disagree with the tool it sits next to, and the
+/// one thing this program is for is being right about exactly this.
+pub fn calculate(params: &str) -> Result<String, String> {
+    let fields = json::parse(params)?;
+
+    let mut tempo: Option<Tempo> = None;
+    let mut sig = TimeSignature::default();
+    let mut unit = BpmUnit::default();
+    let mut sample_rate: u32 = 48_000;
+    let mut bars: u64 = 4;
+
+    for (key, value) in &fields {
+        if *value == Value::Null {
+            continue;
+        }
+        match key.as_str() {
+            "bpm" => {
+                let number = value.as_f64().ok_or_else(|| "bpm: expected a number".to_string())?;
+                tempo = Some(self::tempo(number, "bpm")?);
+            }
+            "sig" => {
+                sig = value
+                    .as_str()
+                    .ok_or_else(|| "sig: expected a string".to_string())?
+                    .parse()
+                    .map_err(|e| format!("sig: {e}"))?
+            }
+            "bpmUnit" => {
+                unit = value
+                    .as_str()
+                    .ok_or_else(|| "bpmUnit: expected a string".to_string())?
+                    .parse()
+                    .map_err(|e| format!("bpmUnit: {e}"))?
+            }
+            "sampleRate" => {
+                let rate = value
+                    .as_u64()
+                    .ok_or_else(|| "sampleRate: expected a count".to_string())?;
+                sample_rate = u32::try_from(rate)
+                    .ok()
+                    .filter(|r| *r > 0)
+                    .ok_or_else(|| format!("sampleRate: {rate} is not a sample rate"))?;
+            }
+            "bars" => {
+                bars = value
+                    .as_u64()
+                    .ok_or_else(|| "bars: expected a count".to_string())?
+            }
+            other => return Err(format!("unknown parameter {other:?}")),
+        }
+    }
+
+    let tempo = tempo.ok_or_else(|| "bpm is required".to_string())?.with_unit(unit);
+    let grid = Grid::new(tempo, sig, sample_rate);
+
+    let per_bar = grid.samples_per_bar();
+    let per_beat = grid.samples_per_beat();
+    // Beats per bar is the bar measured in BPM units — four in 4/4 counted in
+    // quarters, two in 6/8 counted in dotted quarters.
+    let beats_per_bar = sig.whole_notes_per_bar() / unit.whole_notes();
+    let total = per_bar * Rational::from(bars);
+
+    let mut out = Object::new();
+    out.number("tempo", tempo.value().to_f64())
+        .string("sig", &format!("{}/{}", sig.num, sig.den))
+        .string("bpmUnit", &format!("{}/{}", unit.whole_notes().num(), unit.whole_notes().den()))
+        .integer("sampleRate", sample_rate as i64)
+        .integer("bars", bars as i64)
+        .number("beatsPerBar", beats_per_bar.to_f64())
+        .number("barsPerMinute", (Rational::from_int(60) / grid.seconds_per_bar()).to_f64())
+        .number("secondsPerBeat", (per_beat / Rational::from(sample_rate)).to_f64())
+        .number("samplesPerBeat", per_beat.to_f64())
+        .bool("beatSampleExact", per_beat.den() == 1)
+        .number("secondsPerBar", grid.seconds_per_bar().to_f64())
+        .number("samplesPerBar", per_bar.to_f64())
+        .bool("barSampleExact", per_bar.den() == 1)
+        .number("barHz", (Rational::from_int(1) / grid.seconds_per_bar()).to_f64())
+        .number("totalSeconds", (grid.seconds_per_bar() * Rational::from(bars)).to_f64())
+        .number("totalSamples", total.to_f64())
+        .integer("totalSamplesRounded", total.round_half_up() as i64)
+        .bool("totalSampleExact", total.den() == 1);
+
+    let rows: Vec<Object> = note::table(&grid)
+        .iter()
+        .map(|row| {
+            let mut o = Object::new();
+            o.string("label", &row.value.label())
+                .integer("denominator", row.value.denominator as i64)
+                .string("flavour", flavour_name(row.value.flavour))
+                .number("ms", row.millis())
+                .number("hz", row.hertz())
+                .number("samples", row.samples.to_f64())
+                .bool("sampleExact", row.is_sample_exact())
+                .number("perBar", row.per_bar.to_f64());
+            o
+        })
+        .collect();
+    out.rows("notes", &rows);
+
+    Ok(out.render())
+}
+
+fn flavour_name(f: note::Flavour) -> &'static str {
+    match f {
+        note::Flavour::Straight => "straight",
+        note::Flavour::Dotted => "dotted",
+        note::Flavour::Triplet => "triplet",
+    }
 }
 
 /// Reads a flat JSON object into [`Params`].
@@ -519,5 +639,74 @@ mod tests {
         assert!(process(&file(4), "200 loop.wav", "not json").is_err());
         // Zero buckets is a degenerate request, not a crash.
         assert!(peaks(&file(4), 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_calculator_agrees_with_the_cutter() {
+        // The reason this call exists at all. 103 BPM in 4/4 at 44.1 kHz is the
+        // reference case, and its bar length is the number the whole tool is
+        // built around: 60·44100·4/103 = 102757.28…
+        let json = calculate("{\"bpm\":103,\"sampleRate\":44100,\"bars\":16}").expect("no result");
+        assert!(json.contains("\"samplesPerBar\":102757.28"), "{json}");
+        assert!(json.contains("\"barSampleExact\":false"), "{json}");
+        assert!(json.contains("\"beatsPerBar\":4.0"), "{json}");
+
+        // 16 bars from zero rounds to 1 644 117, and the cutter's 8-bar loop
+        // starting at bar 8 ends at 1 644 116. Both are right: `Align::Loop`
+        // makes the loop `round(8 · spb)` long from a start that was rounded
+        // separately, rather than the difference of two rounded bar lines. The
+        // one-sample gap between the two answers *is* the alignment choice, and
+        // a calculator that quietly reported the other number would be
+        // contradicting the screen next to it.
+        assert!(json.contains("\"totalSamplesRounded\":1644117"), "{json}");
+        assert!(json.contains("\"totalSeconds\":37.28"), "{json}");
+    }
+
+    #[test]
+    fn a_round_tempo_is_reported_as_sample_exact() {
+        let json = calculate("{\"bpm\":120,\"sampleRate\":48000}").expect("no result");
+        assert!(json.contains("\"samplesPerBar\":96000.0"), "{json}");
+        assert!(json.contains("\"barSampleExact\":true"), "{json}");
+        assert!(json.contains("\"beatSampleExact\":true"), "{json}");
+    }
+
+    #[test]
+    fn the_note_table_comes_back_as_rows() {
+        let json = calculate("{\"bpm\":120,\"sampleRate\":48000}").expect("no result");
+        assert!(json.contains("\"notes\":["), "{json}");
+        // A quarter at 120 is half a second; a dotted eighth is 375 ms.
+        assert!(json.contains("\"label\":\"1/4\""), "{json}");
+        assert!(json.contains("\"label\":\"1/8.\""), "{json}");
+        assert!(json.contains("\"label\":\"1/16T\""), "{json}");
+        assert!(json.contains("\"ms\":500.0"), "{json}");
+        assert!(json.contains("\"ms\":375.0"), "{json}");
+    }
+
+    #[test]
+    fn the_signature_and_the_bpm_unit_are_honoured() {
+        // 6/8 counted in dotted quarters: two beats to the bar, not six.
+        let json = calculate("{\"bpm\":120,\"sig\":\"6/8\",\"bpmUnit\":\"3/8\"}").expect("no result");
+        assert!(json.contains("\"beatsPerBar\":2.0"), "{json}");
+        assert!(json.contains("\"bpmUnit\":\"3/8\""), "{json}");
+    }
+
+    #[test]
+    fn a_missing_tempo_is_refused_rather_than_guessed() {
+        let e = calculate("{\"bars\":4}").expect_err("a tempo was invented");
+        assert!(e.contains("bpm"), "{e}");
+    }
+
+    #[test]
+    fn a_misspelled_calculator_parameter_is_refused() {
+        assert!(calculate("{\"sampleRatte\":48000,\"bpm\":120}").is_err());
+        assert!(calculate("{\"bpm\":120,\"sampleRate\":0}").is_err());
+        assert!(calculate("{\"bpm\":0}").is_err());
+    }
+
+    #[test]
+    fn the_calculator_output_is_byte_identical_twice() {
+        let a = calculate("{\"bpm\":103.5,\"sampleRate\":44100}").expect("no result");
+        let b = calculate("{\"bpm\":103.5,\"sampleRate\":44100}").expect("no result");
+        assert_eq!(a, b);
     }
 }

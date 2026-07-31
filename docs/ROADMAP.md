@@ -9,7 +9,7 @@
 > → write, and `loopslcr batch` puts the 279-file archive through it in 1.3
 > seconds. M5 is under way: the Android toolchain is installed, `loopslcr-jni`
 > is done including the preview engine, and the APK builds, installs and runs —
-> the cutter works end to end and the loop can be ridden by ear. Last updated 30.07.2026.
+> both tabs work end to end and the loop can be ridden by ear. Last updated 30.07.2026.
 
 ## Vision
 
@@ -337,8 +337,7 @@ worth exactly as much as its regression check.
 - [x] Panic guard at every entry point, proved from Java on host *and* device
 - [x] SAF file picking (`ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT`), no broad permissions
 - [x] Compose UI shell
-- [ ] Two tabs (only CUTTER exists; CALCULATOR needs a JNI surface of its own,
-      because computing the grid in Kotlin would be a second source of truth)
+- [x] Two tabs, with a shared view model
 - [ ] **Tab: CUTTER**
   - [x] Waveform view from Rust peak buckets
   - [x] Cut region shown as an overlay with markers
@@ -353,13 +352,15 @@ worth exactly as much as its regression check.
   - [x] Tape character panel + bypass
   - [x] Bit depth, normalize, snap, short-loop override
   - [ ] Export sheet: dither mode, tags, filename template
-- [ ] **Tab: CALCULATOR**
-  - [ ] Beats/min, beats/bar, bars/min, beat length, bar length, Hz
-  - [ ] Fraction table 1/16 … 16/16: percent, ms, Hz, **samples**
-  - [ ] Dotted and triplet rows
-  - [ ] Total duration for N bars
-  - [ ] "→ send to Cutter" action
-- [ ] Shared ViewModel: BPM, signature, BPM unit, sample rate
+- [x] **Tab: CALCULATOR**
+  - [x] Beats/bar, bars/min, beat length, bar length, Hz
+  - [x] Note table 1/1 … 1/32: ms, Hz, **samples**, share of the bar
+  - [x] Dotted and triplet rows
+  - [x] Total duration for N bars
+  - [x] Sample-exactness marked per row — the one entry that is not decoration
+  - [x] "→ send to Cutter" action (tempo becomes a varispeed target)
+  - [ ] Percent-of-bar column in the table (computed, not yet shown)
+- [x] Shared ViewModel: the calculator follows the file the cutter opened
 - [x] **Preview engine**
   - [x] `AudioTrack` streaming from Rust variable-rate resampler
   - [x] Ratio glide via one-pole smoother in the audio thread (tape inertia)
@@ -411,7 +412,7 @@ worth exactly as much as its regression check.
 | M2 | v0.2 Varispeed, bit depth, dither, BPM tagging | **DONE** bar noise-shaped dither |
 | M3 | v0.3 Tape character with loop-periodic modulation | **DONE** |
 | M4 | v0.4 Batch processing, CLI feature-complete | **DONE** |
-| M5 | v1.0 Android APK, two tabs, tape-riding preview | **IN PROGRESS** — cutter and preview run; calculator tab open |
+| M5 | v1.0 Android APK, two tabs, tape-riding preview | **IN PROGRESS** — both tabs and the preview run; draggable markers and the release build open |
 | M6 | v1.1 Saturation (oversampling + ADAA) | TODO |
 | M7 | v2.0 Slice export, Elektron export, desktop GUI | TODO |
 

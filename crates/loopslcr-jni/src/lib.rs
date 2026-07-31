@@ -266,6 +266,26 @@ pub extern "system" fn Java_org_loopslcr_Native_version<'a>(
     })
 }
 
+/// `calculate(String paramsJson) -> String` (JSON). No audio involved.
+///
+/// The calculator screen. It is a native call rather than Kotlin arithmetic so
+/// that both tabs get their numbers from the same grid.
+///
+/// # Safety
+/// Called by the JVM with valid arguments; not to be called from Rust.
+#[no_mangle]
+pub extern "system" fn Java_org_loopslcr_Native_calculate<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    params: JString<'a>,
+) -> jstring {
+    guard(&mut env, std::ptr::null_mut(), |env| {
+        let params = string_arg(env, &params, "params")?;
+        let json = api::calculate(&params)?;
+        to_jstring(env, &json)
+    })
+}
+
 /// `previewCreate(ByteBuffer audio, String name, String paramsJson) -> long`.
 ///
 /// Returns an opaque handle. Zero is never a valid one, so a caller that got an

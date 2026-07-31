@@ -64,6 +64,28 @@ class CutterScreenTest {
         save(shot.asAndroidBitmap(), "cutter.png")
     }
 
+    @Test
+    fun the_calculator_renders_its_table() {
+        val settings = CalculatorSettings(bpm = "103", sampleRate = 44_100, bars = 8)
+        val sums = Calculator.compute(settings).getOrThrow()
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                CalculatorScreen(settings = settings, sums = sums, problem = null, onChange = {})
+            }
+        }
+
+        // Not "1/4": that is also a BPM-unit chip, and a selector that matches
+        // two different things is a selector that will pass for the wrong reason.
+        compose.onNodeWithText("1/16T").assertExists()
+        compose.onNodeWithText("NOTE VALUES").assertExists()
+        // 103 BPM divides no sample rate cleanly, so every row should be marked
+        // inexact — the one fact on the screen that is not decoration.
+        assertTrue(sums.notes.none { it.sampleExact })
+
+        save(compose.onRoot().captureToImage().asAndroidBitmap(), "calculator.png")
+    }
+
     private fun save(bitmap: Bitmap, name: String) {
         val dir = InstrumentationRegistry.getInstrumentation().targetContext.filesDir
         File(dir, name).outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }

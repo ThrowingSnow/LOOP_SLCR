@@ -60,6 +60,13 @@ public final class BridgeTest {
         }
         check("the peaks contain signal", anySignal);
 
+        // --- calculator ---------------------------------------------------
+        String sums = Native.calculate("{\"bpm\":120,\"sampleRate\":48000}");
+        check("the calculator answers", sums.contains("\"samplesPerBar\":96000.0"));
+        check("and returns the note table", sums.contains("\"label\":\"1/8.\""));
+        check("a calculator without a tempo throws", throwsIllegalState(() ->
+                Native.calculate("{\"bars\":4}")));
+
         // --- preview ------------------------------------------------------
         long preview = Native.previewCreate(Native.direct(wav), "200 loop.wav", "{}");
         check("a preview handle is not zero", preview != 0);

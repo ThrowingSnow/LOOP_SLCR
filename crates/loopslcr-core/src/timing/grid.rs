@@ -125,6 +125,18 @@ impl Grid {
             / self.tempo.unit().whole_notes()
     }
 
+    /// How long `whole_notes` of music lasts, in seconds.
+    ///
+    /// The shape every length on this grid comes from: a bar is
+    /// [`TimeSignature::whole_notes_per_bar`] of it, a note value is its own
+    /// fraction of a whole note. Exposed so [`note`](super::note) computes note
+    /// lengths through the same expression the cut points use rather than a
+    /// parallel one that merely agrees.
+    pub fn seconds_per_whole_notes(&self, whole_notes: Rational) -> Rational {
+        Rational::from_int(60) / self.tempo.value() * whole_notes
+            / self.tempo.unit().whole_notes()
+    }
+
     /// Bar length in samples — exact, generally not an integer.
     pub fn samples_per_bar(&self) -> Rational {
         self.seconds_per_bar() * Rational::from(self.sample_rate)

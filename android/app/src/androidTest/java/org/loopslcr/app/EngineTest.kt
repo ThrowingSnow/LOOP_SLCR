@@ -172,6 +172,37 @@ class EngineTest {
     }
 
     @Test
+    fun the_calculator_and_the_cutter_agree_about_the_same_file() {
+        // The reason the calculator is a native call. Both screens are asked
+        // about the same 200 BPM loop, and the bar length one reports has to be
+        // the one the other actually cut with — not a number that resembles it.
+        val plan = Engine.plan(wav, name, Settings())
+        val sums = Calculator.compute(
+            CalculatorSettings(bpm = "200", sampleRate = RATE, bars = plan.bars),
+        ).getOrThrow()
+
+        assertEquals(BAR.toDouble(), sums.samplesPerBar, 0.0)
+        assertTrue(sums.barSampleExact)
+        assertEquals(plan.loopFrames, sums.totalSamplesRounded)
+    }
+
+    @Test
+    fun the_note_table_arrives_whole() {
+        val sums = Calculator.compute(CalculatorSettings(bpm = "120", sampleRate = 48_000))
+            .getOrThrow()
+        assertEquals(18, sums.notes.size)
+        val quarter = sums.notes.first { it.label == "1/4" }
+        assertEquals(500.0, quarter.ms, 1e-9)
+        assertEquals(24_000.0, quarter.samples, 0.0)
+        assertTrue(quarter.sampleExact)
+    }
+
+    @Test
+    fun a_calculator_without_a_tempo_fails_rather_than_guessing() {
+        assertTrue(Calculator.compute(CalculatorSettings(bpm = "")).isFailure)
+    }
+
+    @Test
     fun a_panic_becomes_an_exception_here_too() {
         // The guard was proved on the host. Android uses a different runtime and
         // a different unwinder, so the claim is worth making again where it will

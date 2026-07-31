@@ -6,8 +6,22 @@ import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -100,30 +114,72 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                CutterScreen(
-                    loaded = loaded,
-                    settings = settings,
-                    plan = plan,
-                    busy = busy,
-                    problem = problem,
-                    playing = playing,
-                    playHead = head,
-                    onPlay = { model.togglePlay() },
-                    onOpen = {
-                        // Not `audio/*`: a WAVE file that a device has decided is
-                        // `application/octet-stream` would be unpickable, and the
-                        // native side rejects anything that is not RIFF anyway.
-                        openFile.launch(arrayOf("*/*"))
-                    },
-                    onExport = {
-                        model.export { bytes ->
-                            pendingExport = bytes
-                            createFile.launch(model.suggestedName())
+                val calculator by model.calculator.collectAsState()
+                val sums by model.sums.collectAsState()
+                val calculatorProblem by model.calculatorProblem.collectAsState()
+                var tab by remember { mutableIntStateOf(0) }
+
+                // The insets are consumed once, here, so the tab bar clears the
+                // status bar and the screens below inherit a clean area. Doing it
+                // in both places padded everything twice.
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Palette.background)
+                        .windowInsetsPadding(WindowInsets.safeDrawing),
+                ) {
+                    TabRow(
+                        selectedTabIndex = tab,
+                        containerColor = Palette.background,
+                        contentColor = Palette.wave,
+                    ) {
+                        Tab(tab == 0, onClick = { tab = 0 }) {
+                            Text("CUTTER", Modifier.padding(12.dp), fontSize = 12.sp)
                         }
-                    },
-                    onChange = { change -> model.update(change) },
-                    onDismissProblem = { model.dismissProblem() },
-                )
+                        Tab(tab == 1, onClick = { tab = 1 }) {
+                            Text("CALCULATOR", Modifier.padding(12.dp), fontSize = 12.sp)
+                        }
+                    }
+
+                    when (tab) {
+                        0 -> CutterScreen(
+                            loaded = loaded,
+                            settings = settings,
+                            plan = plan,
+                            busy = busy,
+                            problem = problem,
+                            playing = playing,
+                            playHead = head,
+                            onPlay = { model.togglePlay() },
+                            onOpen = {
+                                // Not `audio/*`: a WAVE file a device has decided
+                                // is `application/octet-stream` would be
+                                // unpickable, and the native side rejects
+                                // anything that is not RIFF anyway.
+                                openFile.launch(arrayOf("*/*"))
+                            },
+                            onExport = {
+                                model.export { bytes ->
+                                    pendingExport = bytes
+                                    createFile.launch(model.suggestedName())
+                                }
+                            },
+                            onChange = { change -> model.update(change) },
+                            onDismissProblem = { model.dismissProblem() },
+                        )
+
+                        else -> CalculatorScreen(
+                            settings = calculator,
+                            sums = sums,
+                            problem = calculatorProblem,
+                            onSendToCutter = {
+                                model.sendTempoToCutter()
+                                tab = 0
+                            },
+                            onChange = { change -> model.updateCalculator(change) },
+                        )
+                    }
+                }
             }
         }
     }
