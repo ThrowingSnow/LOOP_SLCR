@@ -15,6 +15,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 
 /** The two ends of the cut. */
@@ -169,15 +170,6 @@ fun Waveform(
             right = null
         }
 
-        // Everything outside the cut is dimmed rather than hidden: the user is
-        // choosing a region *of a file*, and a file whose discarded parts have
-        // vanished gives them nothing to judge the choice against.
-        if (left != null && right != null) {
-            drawRect(Palette.outside, Offset(0f, 0f), Size(size.width * left, size.height))
-            val end = size.width * right
-            drawRect(Palette.outside, Offset(end, 0f), Size(size.width - end, size.height))
-        }
-
         val laneHeight = size.height / channels
         for (channel in 0 until channels) {
             val top = laneHeight * channel
@@ -204,7 +196,20 @@ fun Waveform(
             }
         }
 
+        // Everything outside the cut is dimmed rather than hidden: the user is
+        // choosing a region *of a file*, and a file whose discarded parts have
+        // vanished gives them nothing to judge the choice against.
+        //
+        // **After** the waveform, which is where this was wrong from the first
+        // version: drawn before it, the bars painted straight over the shading
+        // and the region was invisible. It never showed on the emulator because
+        // there the cut was always the whole file, so there was nothing outside
+        // it to dim — a bug that only a real file could reveal.
         if (left != null && right != null) {
+            drawRect(Palette.outside, Offset(0f, 0f), Size(size.width * left, size.height))
+            val end = size.width * right
+            drawRect(Palette.outside, Offset(end, 0f), Size(size.width - end, size.height))
+
             marker(size.width * left, held == Marker.Start, atStart = true)
             marker(size.width * right, held == Marker.End, atStart = false)
         }
@@ -224,11 +229,16 @@ fun Waveform(
  * and it brightens while held so the finger knows which one it took.
  */
 private fun DrawScope.marker(x: Float, held: Boolean, atStart: Boolean) {
-    val colour = if (held) Palette.playHead else Palette.marker
-    drawRect(colour, Offset(x - 1f, 0f), Size(if (held) 3f else 2f, size.height))
+    // Not the play head's green: both can be on screen at once, and two things
+    // that mean different things must not look the same.
+    val colour = if (held) Palette.grabbed else Palette.marker
+    val line = if (held) 3f else 2f
+    drawRect(colour, Offset(x - line / 2f, 0f), Size(line, size.height))
 
-    val width = 16f
-    val height = 26f
+    // Sized in dp, not pixels. Sixteen pixels is a millimetre and a half on a
+    // phone — a mark, not a target.
+    val width = 12.dp.toPx()
+    val height = 18.dp.toPx()
     val left = if (atStart) x else x - width
     drawRect(colour, Offset(left, 0f), Size(width, height))
 }
@@ -242,6 +252,8 @@ object Palette {
     val outside = Color(0x99000000)
     val axis = Color(0xFF2A2A33)
     val marker = Color(0xFFF2F2F2)
+    /** A marker under a finger. Deliberately not the play head's colour. */
+    val grabbed = Color(0xFF7DD3FC)
     val playHead = Color(0xFF4ADE80)
     val text = Color(0xFFE8E8EC)
     val dim = Color(0xFF8A8A96)

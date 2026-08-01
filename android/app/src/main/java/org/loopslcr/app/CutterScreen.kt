@@ -114,7 +114,7 @@ fun CutterScreen(
         }
 
         Facts(loaded.analysis)
-        if (plan != null) PlanCard(plan)
+        if (plan != null) PlanCard(plan, settings, onChange)
 
         SectionTitle("Source")
         SourceControls(loaded.analysis, settings, onChange)
@@ -221,7 +221,7 @@ private fun Facts(a: Analysis) {
 }
 
 @Composable
-private fun PlanCard(p: Plan) {
+private fun PlanCard(p: Plan, s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
     Panel {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Fact("cut", "${p.bars} bars from ${p.regionStart} (${p.barsSource})")
@@ -254,6 +254,25 @@ private fun PlanCard(p: Plan) {
             if (p.normalizeGain != null) Fact("normalize", "×" + "%.4f".format(p.normalizeGain))
             if (p.dithered) Fact("dither", "applied")
             if (p.tape) Fact("tape", "on")
+
+            // A foldback adds the tail onto the head, so overshooting full
+            // scale is normal rather than a mistake — the tool reports it
+            // instead of clipping quietly. Reporting it without offering the
+            // remedy leaves the user holding a number and no next move.
+            if (p.clips && !s.normalize) {
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "the export would clip",
+                        color = Palette.bad,
+                        fontSize = 12.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedButton(onClick = { onChange { it.copy(normalize = true) } }) {
+                        Text("Normalize", fontSize = 12.sp)
+                    }
+                }
+            }
         }
     }
 }

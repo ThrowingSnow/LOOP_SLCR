@@ -5,7 +5,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
@@ -81,6 +83,44 @@ class WaveformDragTest {
         // down. Four movements were made; every one of them has to arrive.
         assertTrue("only ${moves.size} move(s) arrived", moves.size >= 3)
         assertTrue("the drag never reached the right half: $moves", moves.any { it > 0.6f })
+    }
+
+    @Test
+    fun what_lies_outside_the_cut_is_visibly_dimmed() {
+        // This is the bug a screenshot could not catch. The shading was drawn
+        // before the waveform, so the bars painted straight over it — and every
+        // emulator test had the whole file as its region, leaving nothing
+        // outside to dim. Only a real file with a partial cut showed it.
+        //
+        // So it is checked in pixels: a column outside the region must be
+        // darker than a column inside it.
+        compose.setContent {
+            Waveform(
+                peaks = FloatArray(64 * 2 * 2) { if (it % 2 == 0) -1f else 1f },
+                channels = 2,
+                frames = frames,
+                region = (frames / 4)..(frames * 3 / 4),
+                modifier = Modifier.testTag("wave").size(320.dp, 120.dp),
+            )
+        }
+
+        val shot = compose.onNodeWithTag("wave").captureToImage().asAndroidBitmap()
+        val inside = brightness(shot, shot.width / 2)
+        val before = brightness(shot, shot.width / 8)
+        val after = brightness(shot, shot.width * 7 / 8)
+
+        assertTrue("before the cut: $before vs inside $inside", before < inside * 0.8)
+        assertTrue("after the cut: $after vs inside $inside", after < inside * 0.8)
+    }
+
+    /** Mean luminance of one column, as a stand-in for "how bright is this bit". */
+    private fun brightness(bitmap: android.graphics.Bitmap, x: Int): Double {
+        var total = 0.0
+        for (y in 0 until bitmap.height) {
+            val p = bitmap.getPixel(x, y)
+            total += ((p shr 16 and 0xFF) + (p shr 8 and 0xFF) + (p and 0xFF)) / 3.0
+        }
+        return total / bitmap.height
     }
 
     @Test

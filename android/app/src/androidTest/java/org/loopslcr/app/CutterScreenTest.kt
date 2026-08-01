@@ -35,13 +35,14 @@ class CutterScreenTest {
         val raw = EngineTest.wav(bars = 8)
         val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
         val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
-        val plan = Engine.plan(org.loopslcr.Native.direct(raw), "200 loop.wav", Settings())
+        // A partial cut, so the screenshot shows a region rather than the whole file.
+        val plan = Engine.plan(org.loopslcr.Native.direct(raw), "200 loop.wav", Settings(bars = 4L, skip = 2L))
 
         compose.setContent {
             MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
                 CutterScreen(
                     loaded = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks),
-                    settings = Settings(tape = true),
+                    settings = Settings(tape = true, bars = 4L, skip = 2L),
                     plan = plan,
                     busy = Busy.Idle,
                     problem = null,
