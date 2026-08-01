@@ -115,13 +115,17 @@ fun CutterScreen(
         Facts(loaded.analysis)
         if (plan != null) PlanCard(plan)
 
+        SectionTitle("Source")
+        SourceControls(loaded.analysis, settings, onChange)
+
         SectionTitle("Loop")
         BarsRow(settings, onChange)
         SkipRow(settings, onChange)
         WorkflowRow(settings, onChange)
+        AlignRow(settings, onChange)
 
         SectionTitle("Varispeed")
-        SpeedControls(settings, onChange)
+        SpeedControls(settings, plan, onChange)
 
         SectionTitle("Tape")
         TapeControls(settings, onChange)
@@ -290,6 +294,83 @@ private fun SkipRow(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
     }
 }
 
+/**
+ * What the file is, where the file is wrong.
+ *
+ * The tempo field is blank by default and stays blank while the file knows its
+ * own tempo — a prefilled box invites editing something that was already right.
+ * It exists for the files that declare nothing, which without it cannot be cut
+ * at all.
+ */
+@Composable
+private fun SourceControls(
+    a: Analysis,
+    s: Settings,
+    onChange: ((Settings) -> Settings) -> Unit,
+) {
+    var text by remember(a) { mutableStateOf(s.bpm) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { entered ->
+            text = entered
+            onChange { it.copy(bpm = entered) }
+        },
+        label = { Text("BPM") },
+        // Supporting text rather than a placeholder: Material only shows a
+        // placeholder once the field has focus, and "what does the file say"
+        // is precisely what you want to know *before* deciding to type.
+        supportingText = {
+            Text(
+                when {
+                    text.trim().toDoubleOrNull() != null -> "overriding the file"
+                    a.tempo != null -> "blank — using ${trim(a.tempo)} from the file"
+                    else -> "the file declares no tempo; enter one to cut it"
+                },
+                fontSize = 11.sp,
+            )
+        },
+        isError = a.tempo == null && text.trim().toDoubleOrNull() == null,
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("signature", color = Palette.dim, fontSize = 12.sp, modifier = Modifier.width(88.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (v in listOf("4/4", "3/4", "6/8", "7/8")) {
+                Chip(v, s.sig == v) { onChange { it.copy(sig = v) } }
+            }
+        }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("BPM unit", color = Palette.dim, fontSize = 12.sp, modifier = Modifier.width(88.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (v in listOf("1/4", "3/8", "1/8")) {
+                Chip(v, s.bpmUnit == v) { onChange { it.copy(bpmUnit = v) } }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AlignRow(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("align", color = Palette.dim, fontSize = 12.sp, modifier = Modifier.width(88.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Chip("loop", s.align == "loop") { onChange { it.copy(align = "loop") } }
+            Chip("grid", s.align == "grid") { onChange { it.copy(align = "grid") } }
+        }
+    }
+    Text(
+        if (s.align == "loop") {
+            "every repeat the same length"
+        } else {
+            "both markers on bar lines; length may vary by a sample"
+        },
+        color = Palette.dim,
+        fontSize = 11.sp,
+    )
+}
+
 @Composable
 private fun WorkflowRow(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -308,8 +389,16 @@ private fun DepthRow(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
     }
 }
 
+/**
+ * The varispeed, and what it means in the three units people think in.
+ *
+ * Semitones for a musician, per cent for a tape machine, BPM for a sequencer.
+ * They are one number under three names, and showing only the one that happens
+ * to be the input makes the other two a mental conversion the tool could have
+ * done.
+ */
 @Composable
-private fun SpeedControls(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
+private fun SpeedControls(s: Settings, plan: Plan?, onChange: ((Settings) -> Settings) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Chip("semitones", s.speedMode == SpeedMode.Semitones) {
             onChange { it.copy(speedMode = SpeedMode.Semitones) }
@@ -317,6 +406,23 @@ private fun SpeedControls(s: Settings, onChange: ((Settings) -> Settings) -> Uni
         Chip("target BPM", s.speedMode == SpeedMode.TargetBpm) {
             onChange { it.copy(speedMode = SpeedMode.TargetBpm) }
         }
+    }
+
+    if (plan != null) {
+        // From the plan, not from the control: the ratio may be a fraction the
+        // slider only approximates, and 90/103 is the number that matters.
+        val percent = (plan.ratio - 1.0) * 100.0
+        Fact(
+            "speed",
+            "%+.3f st · %+.1f cents".format(plan.semitones, plan.semitones * 100) +
+                " · %+.3f %%".format(percent),
+        )
+        Fact(
+            "tempo",
+            "${trim(plan.tempo)} → ${trim(plan.resultingTempo)} BPM" +
+                if (plan.ratioExact) "  · exact" else "  · approximated",
+            if (plan.ratioExact) Palette.text else Palette.warn,
+        )
     }
 
     when (s.speedMode) {

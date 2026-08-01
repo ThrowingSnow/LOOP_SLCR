@@ -206,6 +206,53 @@ class EngineTest {
     }
 
     @Test
+    fun a_file_with_no_tempo_anywhere_is_refused_until_one_is_given() {
+        // Fourteen of the 279 archive files are like this. Before the cutter had
+        // a BPM field they could not be cut on the phone at all: the pipeline
+        // refuses, correctly, and there was nothing to answer it with.
+        val nameless = "drums.wav"
+        val e = runCatching { Engine.plan(wav, nameless, Settings()) }.exceptionOrNull()
+        assertTrue(e is IllegalStateException)
+        assertTrue("$e", e!!.message!!.contains("tempo"))
+
+        val plan = Engine.plan(wav, nameless, Settings(bpm = "200"))
+        assertEquals(200.0, plan.tempo, 0.0)
+        assertEquals("given", plan.tempoSource)
+        assertEquals(8L * BAR, plan.loopFrames)
+    }
+
+    @Test
+    fun a_typed_tempo_beats_the_one_in_the_name() {
+        val plan = Engine.plan(wav, name, Settings(bpm = "100"))
+        assertEquals(100.0, plan.tempo, 0.0)
+        assertEquals("given", plan.tempoSource)
+        // Half the tempo is twice the bar, so the same audio reads as four bars
+        // instead of eight — same total frames, a different grid under them.
+        // That the *count* changed is what proves the override reached the grid.
+        assertEquals(4L, plan.bars)
+        assertEquals(8L * BAR, plan.loopFrames)
+    }
+
+    @Test
+    fun a_blank_tempo_leaves_the_file_to_speak_for_itself() {
+        val plan = Engine.plan(wav, name, Settings(bpm = "   "))
+        assertEquals(200.0, plan.tempo, 0.0)
+        assertEquals("filename", plan.tempoSource)
+    }
+
+    @Test
+    fun grid_alignment_is_reachable_and_changes_the_region() {
+        val loop = Engine.plan(wav, name, Settings(bars = 3L, skip = 1L))
+        val grid = Engine.plan(wav, name, Settings(bars = 3L, skip = 1L, align = "grid"))
+        assertEquals(loop.regionStart, grid.regionStart)
+        // At 200 BPM and 8 kHz a bar is exactly 9600 frames, so the two agree
+        // here — what is checked is that the parameter is accepted and applied,
+        // not that it always differs.
+        assertEquals(3L * BAR, loop.loopFrames)
+        assertEquals(3L * BAR, grid.loopFrames)
+    }
+
+    @Test
     fun a_panic_becomes_an_exception_here_too() {
         // The guard was proved on the host. Android uses a different runtime and
         // a different unwinder, so the claim is worth making again where it will

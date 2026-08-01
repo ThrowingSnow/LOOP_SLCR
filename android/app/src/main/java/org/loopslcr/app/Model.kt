@@ -111,6 +111,27 @@ enum class SpeedMode { Semitones, TargetBpm }
  * defaults are written down.
  */
 data class Settings(
+    /**
+     * The source tempo, overriding whatever the file says.
+     *
+     * Blank means "whatever the file or its name declares", which is right for
+     * most of the archive. It has to be settable all the same: fourteen of the
+     * 279 files carry no tempo anywhere, and without this field they cannot be
+     * cut at all — the pipeline refuses, correctly, and the UI had no way to
+     * answer it.
+     */
+    val bpm: String = "",
+    val sig: String = "4/4",
+    val bpmUnit: String = "1/4",
+    /**
+     * Which of the two ends is pinned to the grid.
+     *
+     * `loop`: the cut-in is on a bar line and the length is
+     * `round(bars · samplesPerBar)`, so every repeat is the same length.
+     * `grid`: both markers land on bar lines, so the loop stays in step with a
+     * timeline but its length can vary by a sample.
+     */
+    val align: String = "loop",
     val speedMode: SpeedMode = SpeedMode.Semitones,
     val semitones: Double = 0.0,
     val targetBpm: Double? = null,
@@ -138,6 +159,10 @@ data class Settings(
 
     fun toJson(): String {
         val o = JSONObject()
+        bpm.trim().toDoubleOrNull()?.takeIf { it > 0 }?.let { o.put("bpm", it) }
+        if (sig != "4/4") o.put("sig", sig)
+        if (bpmUnit != "1/4") o.put("bpmUnit", bpmUnit)
+        if (align != "loop") o.put("align", align)
         when (speedMode) {
             SpeedMode.Semitones -> if (semitones != 0.0) o.put("semitones", semitones)
             SpeedMode.TargetBpm -> targetBpm?.let { o.put("targetBpm", it) }
