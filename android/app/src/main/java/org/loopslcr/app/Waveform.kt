@@ -4,8 +4,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -34,6 +36,12 @@ object Markers {
         return kotlin.math.round(bar).toLong().coerceAtLeast(0L)
     }
 
+    /** Where that bar sits, as a fraction of the file. The inverse of [barAt]. */
+    fun fractionOfBar(bar: Long, frames: Long, samplesPerBar: Double): Float {
+        if (frames <= 0L || samplesPerBar <= 0.0) return 0f
+        return ((bar * samplesPerBar) / frames).toFloat().coerceIn(0f, 1f)
+    }
+
     /**
      * The new `skip` and `bars` after dragging [marker] to [bar].
      *
@@ -60,6 +68,21 @@ object Markers {
  * `FloatArray`, walked in the order it is drawn. Measuring happens once per
  * file; a resize only redraws, because the bucket count is fixed and the width
  * is a scale factor, not a new measurement.
+ *
+ * # Dragging, and the two things that made it feel broken
+ *
+ * **The gesture must outlive the plan.** `pointerInput` restarts whenever its
+ * keys change, and a restart cancels the gesture in progress. Keying it on the
+ * region meant that the drag's own effect — a new plan, a moved region — tore
+ * down the handler mid-drag, so the finger kept moving and nothing followed. It
+ * is keyed on `frames` now, which changes only when a different file is opened,
+ * and the current region is read through [rememberUpdatedState] instead.
+ *
+ * **The line must follow the finger, not the pipeline.** Drawing the marker from
+ * the region meant it lagged a debounce plus a native call behind the touch, and
+ * rubber-banded when the answer arrived. While a drag is in progress the marker
+ * is drawn where the finger is, snapped to the bar it will land on, so what is
+ * on screen is a promise rather than a report.
  */
 @Composable
 fun Waveform(
@@ -69,33 +92,48 @@ fun Waveform(
     region: LongRange?,
     /** Where the preview is, as a fraction of the whole file, or null when stopped. */
     playHead: Float? = null,
+    /** The bar length, so a drag can be shown snapped to the grid it will land on. */
+    samplesPerBar: Double? = null,
     /** Called while a marker is dragged, with its new position as a fraction. */
     onDrag: ((Marker, Float) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    // Read inside the gesture without keying the handler on it: the region moves
+    // *because* of the drag, and a handler that restarted on its own effect
+    // cancelled every gesture that mattered.
+    val current by rememberUpdatedState(region)
+
     // Which marker the finger grabbed, decided once when the drag starts.
     // Re-deciding per movement would let a fast drag hand the gesture to the
     // other marker halfway through and swap the ends of the loop.
-    var grabbed by remember { mutableStateOf(Marker.Start) }
+    var grabbed by remember { mutableStateOf<Marker?>(null) }
+    var at by remember { mutableFloatStateOf(0f) }
 
-    val gestures = if (onDrag == null || region == null || frames <= 0) {
+    val gestures = if (onDrag == null || frames <= 0L) {
         Modifier
     } else {
-        Modifier.pointerInput(frames, region.first, region.last) {
+        Modifier.pointerInput(frames) {
             detectDragGestures(
                 onDragStart = { down ->
-                    val start = size.width * (region.first.toFloat() / frames)
-                    val end = size.width * (region.last.toFloat() / frames)
-                    grabbed = if (abs(down.x - start) <= abs(down.x - end)) {
-                        Marker.Start
-                    } else {
-                        Marker.End
+                    val here = current
+                    if (here != null) {
+                        val start = size.width * (here.first.toFloat() / frames)
+                        val end = size.width * (here.last.toFloat() / frames)
+                        grabbed = if (abs(down.x - start) <= abs(down.x - end)) {
+                            Marker.Start
+                        } else {
+                            Marker.End
+                        }
+                        at = (down.x / size.width).coerceIn(0f, 1f)
                     }
                 },
                 onDrag = { change, _ ->
                     change.consume()
-                    onDrag(grabbed, (change.position.x / size.width).coerceIn(0f, 1f))
+                    at = (change.position.x / size.width).coerceIn(0f, 1f)
+                    grabbed?.let { onDrag(it, at) }
                 },
+                onDragEnd = { grabbed = null },
+                onDragCancel = { grabbed = null },
             )
         }
     }
@@ -106,14 +144,38 @@ fun Waveform(
 
         drawRect(Palette.waveBackground)
 
+        // Where the drag will land, snapped, or null when nothing is being
+        // dragged. Snapped here as well as in the view model — through the same
+        // `Markers.barAt` — so the line cannot promise a position the commit
+        // then rounds somewhere else.
+        val held = grabbed
+        val preview = if (held != null && samplesPerBar != null && samplesPerBar > 0.0) {
+            Markers.fractionOfBar(Markers.barAt(at, frames, samplesPerBar), frames, samplesPerBar)
+        } else if (held != null) {
+            at
+        } else {
+            null
+        }
+
+        val left: Float?
+        val right: Float?
+        if (region != null && frames > 0L) {
+            val fromRegion = region.first.toFloat() / frames
+            val toRegion = region.last.toFloat() / frames
+            left = if (held == Marker.Start && preview != null) preview else fromRegion
+            right = if (held == Marker.End && preview != null) preview else toRegion
+        } else {
+            left = null
+            right = null
+        }
+
         // Everything outside the cut is dimmed rather than hidden: the user is
         // choosing a region *of a file*, and a file whose discarded parts have
         // vanished gives them nothing to judge the choice against.
-        if (region != null && frames > 0) {
-            val left = size.width * (region.first.toFloat() / frames)
-            val right = size.width * (region.last.toFloat() / frames)
-            drawRect(Palette.outside, Offset(0f, 0f), Size(left, size.height))
-            drawRect(Palette.outside, Offset(right, 0f), Size(size.width - right, size.height))
+        if (left != null && right != null) {
+            drawRect(Palette.outside, Offset(0f, 0f), Size(size.width * left, size.height))
+            val end = size.width * right
+            drawRect(Palette.outside, Offset(end, 0f), Size(size.width - end, size.height))
         }
 
         val laneHeight = size.height / channels
@@ -142,9 +204,9 @@ fun Waveform(
             }
         }
 
-        if (region != null && frames > 0) {
-            marker(size.width * (region.first.toFloat() / frames))
-            marker(size.width * (region.last.toFloat() / frames))
+        if (left != null && right != null) {
+            marker(size.width * left, held == Marker.Start, atStart = true)
+            marker(size.width * right, held == Marker.End, atStart = false)
         }
 
         if (playHead != null) {
@@ -154,8 +216,21 @@ fun Waveform(
     }
 }
 
-private fun DrawScope.marker(x: Float) {
-    drawRect(Palette.marker, Offset(x - 1f, 0f), Size(2f, size.height))
+/**
+ * One end of the cut, with a handle.
+ *
+ * A two-pixel line is a thing to look at, not a thing to grab. The handle is the
+ * affordance: it sits inside the loop so the two never overlap at a short cut,
+ * and it brightens while held so the finger knows which one it took.
+ */
+private fun DrawScope.marker(x: Float, held: Boolean, atStart: Boolean) {
+    val colour = if (held) Palette.playHead else Palette.marker
+    drawRect(colour, Offset(x - 1f, 0f), Size(if (held) 3f else 2f, size.height))
+
+    val width = 16f
+    val height = 26f
+    val left = if (atStart) x else x - width
+    drawRect(colour, Offset(left, 0f), Size(width, height))
 }
 
 /** The one place a colour is chosen. */

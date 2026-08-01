@@ -176,7 +176,7 @@ class CutterViewModel : ViewModel() {
         val plan = _plan.value ?: return
         if (plan.bars <= 0) return
 
-        val perBar = (plan.regionEnd - plan.regionStart).toDouble() / plan.bars
+        val perBar = plan.samplesPerBar ?: return
         if (perBar <= 0.0) return
 
         val bar = Markers.barAt(fraction, file.analysis.frames, perBar)

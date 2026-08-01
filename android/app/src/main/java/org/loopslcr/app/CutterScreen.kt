@@ -86,6 +86,7 @@ fun CutterScreen(
                 frames = loaded.analysis.frames,
                 region = plan?.let { it.regionStart..it.regionEnd },
                 playHead = playHead,
+                samplesPerBar = plan?.samplesPerBar,
                 onDrag = onDragMarker,
                 modifier = Modifier
                     .fillMaxWidth()

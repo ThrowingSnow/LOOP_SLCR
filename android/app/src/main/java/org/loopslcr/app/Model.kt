@@ -70,6 +70,17 @@ data class Plan(
     val normalizeGain: Double?,
     val dithered: Boolean,
 ) {
+    /**
+     * The bar length in frames, as this plan measured it.
+     *
+     * Derived rather than sent, and rounded — it turns a fingertip into a bar
+     * index and never into a cut point, so the exact grid still decides where
+     * the samples fall. One definition, so the line drawn under the finger and
+     * the bar the drag commits to cannot disagree.
+     */
+    val samplesPerBar: Double?
+        get() = if (bars > 0) (regionEnd - regionStart).toDouble() / bars else null
+
     companion object {
         fun from(o: JSONObject) = Plan(
             tempo = o.getDouble("tempo"),
