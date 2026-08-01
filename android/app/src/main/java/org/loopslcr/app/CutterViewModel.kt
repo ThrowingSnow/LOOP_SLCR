@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.cancellation.CancellationException
 import java.nio.ByteBuffer
 
 
@@ -253,6 +254,8 @@ class CutterViewModel : ViewModel() {
                 recalculate()
                 _plan.value = null
                 schedulePlan(immediately = true)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 _loaded.value = null
                 _plan.value = null
@@ -289,6 +292,14 @@ class CutterViewModel : ViewModel() {
                 _plan.value = plan
                 _problem.value = null
                 followPreview(plan)
+            } catch (e: CancellationException) {
+                // A newer change cancelled this one. That is the debounce
+                // working, not a failure — and reporting it left "h1 was
+                // cancelled" on screen, which is a `JobCancellationException`
+                // with its class name obfuscated by R8. Rethrowing is also
+                // required: swallowing a cancellation leaves the coroutine
+                // machinery believing a cancelled job is still alive.
+                throw e
             } catch (e: Throwable) {
                 _plan.value = null
                 _problem.value = explain(e, "the settings do not describe a cut")
@@ -307,6 +318,8 @@ class CutterViewModel : ViewModel() {
                     Engine.process(file.bytes, file.name, wanted)
                 }
                 sink(out)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 _problem.value = explain(e, "the cut failed")
             } finally {

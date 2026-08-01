@@ -92,6 +92,11 @@ class PreviewPlayer {
             running = true
             pump = Thread({ pump(channels) }, "loopslcr-preview").also { it.start() }
             null
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            // Never a failure to report: the caller went away. Rethrown so the
+            // coroutine that owns this one learns it was cancelled.
+            stop()
+            throw e
         } catch (e: Throwable) {
             stop()
             explain(e, "the preview could not start")

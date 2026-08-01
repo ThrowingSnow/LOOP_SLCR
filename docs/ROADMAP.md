@@ -376,6 +376,8 @@ worth exactly as much as its regression check.
       `-PtestRelease` runs all 25 instrumented tests against the shrunk APK
 - [x] Large files survive: read straight into a direct buffer, `OutOfMemoryError`
       caught and reported instead of killing the app
+- [x] `pipeline::Stage::Plan` — the dry run skips resampling, 33 ms against
+      6.26 s, so the UI answers while a control is still moving
 - [ ] Stream rather than decode whole — the real fix for long files
 - [ ] GitHub Actions: release APK on tag push
 

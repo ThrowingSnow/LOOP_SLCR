@@ -233,7 +233,14 @@ private fun PlanCard(p: Plan) {
             Fact("result", "${trim(p.resultingTempo)} BPM · ${p.outputFrames} frames")
             Fact(
                 "peak",
-                "%.4f".format(p.peak) + if (p.clips) "  — clips" else "",
+                buildString {
+                    append("%.4f".format(p.peak))
+                    if (p.clips) append("  — clips")
+                    // Said rather than implied: the dry run skips the resampling
+                    // so it can answer while a finger is moving, and a
+                    // resampler overshoots by a fraction of a dB.
+                    if (p.peakBeforeVarispeed && p.ratio != 1.0) append("  (before varispeed)")
+                },
                 if (p.clips) Palette.bad else Palette.text,
             )
             if (p.shortBy > 0) {

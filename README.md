@@ -282,6 +282,17 @@ use. Those keeps and what they cost the claim are written down in
 `app/proguard-rules-under-test.pro`: the run proves the JNI rules, the packaged
 `.so` and the signed APK, and does not prove anything about shrunk Kotlin.
 
+**The dry run does not resample.** It answers while a finger is still moving,
+so it stops after the decisions and the cheap operations: on the reference file
+that is **33 ms against 6.26 seconds**, a factor of 189, because a 32-tap
+windowed sinc over 940 800 frames is a hundred million multiply-adds and
+everything else is a memcpy. Every number about *timing* is identical either
+way — none of it was ever derived from the samples — and a test asserts that
+field by field. What it costs is one thing, named on screen: the peak is
+measured before the varispeed, so a resampler's fraction of a dB of overshoot
+is not in it. `loopslcr cut --dry-run` still takes the full path, because on a
+desktop the exact peak before writing is worth six seconds.
+
 **A whole file is held in memory and decoded to 64-bit samples**, so five
 minutes of 48 kHz stereo becomes about 230 MB before the pipeline copies it
 once. The file is read straight into a direct buffer, so the Java heap never

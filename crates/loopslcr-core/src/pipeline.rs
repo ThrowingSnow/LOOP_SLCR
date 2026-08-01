@@ -190,6 +190,15 @@ pub enum Taken {
 /// it has room for, and nothing has to be recomputed or scraped back out of text.
 #[derive(Clone, Debug)]
 pub struct Outcome {
+    /// How far the run was taken. `Plan` means the buffer is the cut loop
+    /// *before* varispeed and character, and [`Outcome::peak`] was measured
+    /// there — see [`Stage::Plan`] for what that costs.
+    pub stage: Stage,
+    /// The finished loop's length in frames, in both stages.
+    ///
+    /// In `Plan` the buffer has not been resampled, so `buffer.frames()` is the
+    /// length *before* varispeed; this is the number the file would have.
+    pub output_frames: usize,
     pub buffer: AudioBuffer,
 
     pub source_frames: usize,
@@ -265,7 +274,40 @@ impl Outcome {
 /// When no tempo can be found, when no loop length can be worked out, or when
 /// any stage refuses. A source too short to fill the loop is **not** an error;
 /// see [`Outcome::short_by`].
+/// How far to take the run.
+///
+/// The two callers want different things from the same decisions. An export
+/// wants the audio; a UI with a finger on a slider wants the *numbers*, and
+/// wants them before the finger stops moving.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum Stage {
+    /// Everything, audio included.
+    #[default]
+    Full,
+    /// The decisions, and only the cheap operations.
+    ///
+    /// Cut and fade happen — they are copies. Resampling, tape character and
+    /// dither do not. The difference is not marginal: on the reference file a
+    /// full run with varispeed takes **6.6 seconds** and the same run without
+    /// the resampling takes **0.065**, because a 32-tap windowed sinc over
+    /// 940 800 frames is a hundred million multiply-adds and everything else is
+    /// a memcpy. A UI that ran the full pipeline per slider movement would be
+    /// unusable, and was.
+    ///
+    /// What this costs in accuracy is stated in [`Outcome::peak`] and
+    /// [`Outcome::stage`]: the peak is measured before the varispeed rather
+    /// than after, so a resampler's overshoot — a fraction of a dB — is not in
+    /// it. Everything about *timing* is exact either way, because none of it
+    /// was ever derived from the samples.
+    Plan,
+}
+
+/// The full run: audio and all. See [`run_staged`] to stop early.
 pub fn run(wav: &Wav, name: &str, params: &Params) -> Result<Outcome> {
+    run_staged(wav, name, params, Stage::Full)
+}
+
+pub fn run_staged(wav: &Wav, name: &str, params: &Params, stage: Stage) -> Result<Outcome> {
     let format = wav.format();
     let (tempo, tempo_source) = resolve_tempo(wav, name, params)?;
     let grid = Grid::new(tempo.with_unit(params.bpm_unit), params.sig, format.sample_rate);
@@ -354,38 +396,80 @@ pub fn run(wav: &Wav, name: &str, params: &Params) -> Result<Outcome> {
     // compounding with the cut.
     let ratio = resolve_ratio(params, &grid, bars)?;
     let final_tempo = ratio.resulting_tempo(tempo)?;
-    if !ratio.is_unity() {
-        // The length comes from the grid at the new tempo, never from
-        // `old_length / ratio` — that would round a second time.
-        let target = grid.resampled_length(bars, ratio) as usize;
+
+    // The output length comes from the grid at the new tempo, never from
+    // `old_length / ratio` — that would round a second time. Computed here
+    // rather than read off the buffer, so it is the same number in both stages.
+    let output_frames = if ratio.is_unity() {
+        buffer.frames()
+    } else {
+        grid.resampled_length(bars, ratio) as usize
+    };
+
+    let planning = stage == Stage::Plan;
+
+    if !ratio.is_unity() && !planning {
         buffer = resample::SincResampler::default()
             .with_edge(resample::Edge::Wrap)
-            .resample(&buffer, target)?;
+            .resample(&buffer, output_frames)?;
     }
 
     // Character after the varispeed, because both filters scale their corner
     // frequencies with the speed actually played — and because a filter can only
     // be warmed up over a loop whose length has stopped changing.
-    let character = tape::apply(&mut buffer, &params.tape, ratio);
+    let character = if planning {
+        tape::Tape::default()
+    } else {
+        tape::apply(&mut buffer, &params.tape, ratio)
+    };
 
     let mut peak = gain::Peak::measure(&buffer);
-    let normalized = if params.normalize {
+    let normalized = if !params.normalize {
+        None
+    } else if planning {
+        // The gain normalising *would* apply, from the peak as measured here.
+        // `gain::normalize` computes exactly this factor before touching a
+        // sample, so reporting it costs nothing and invents nothing.
+        (peak.value > 0.0).then(|| {
+            let before = peak.value;
+            peak = gain::Peak { value: gain::FULL_SCALE, ..peak };
+            (gain::FULL_SCALE / before, before)
+        })
+    } else {
         gain::normalize(&mut buffer, gain::FULL_SCALE).map(|factor| {
             let before = peak.value;
             peak = gain::Peak::measure(&buffer);
             (factor, before)
         })
-    } else {
-        None
     };
 
     // Dither immediately before quantisation, and only when the depth actually
     // drops — noise added at or above the source depth is pure loss.
     let mode = params.dither.resolve(format.bits_per_sample, params.depth);
-    let applied = dither::apply(&mut buffer, params.depth, mode, params.dither_seed)
-        .map(|applied| (mode, applied));
+    let applied = if planning {
+        // Whether it would apply is a decision about depths, not about audio,
+        // so the answer is the same without doing it.
+        (mode != Dither::None && !params.depth.is_float()).then(|| {
+            // The same LSB the writer's grid has, by the same expression as in
+            // `dither::apply`: full-scale negative is exactly −1.0, so one step
+            // is 2^-(bits-1).
+            let lsb = 1.0 / (1i64 << (params.depth.bits() - 1)) as f64;
+            (
+                mode,
+                dither::Applied {
+                    lsb,
+                    quantised: mode.quantises(),
+                },
+            )
+        })
+    } else {
+        dither::apply(&mut buffer, params.depth, mode, params.dither_seed)
+            .map(|applied| (mode, applied))
+    };
 
     Ok(Outcome {
+        stage,
+        output_frames,
         buffer,
         source_frames: source.frames(),
         sample_rate: format.sample_rate,
@@ -712,5 +796,105 @@ mod tests {
             run(&wav, "200 loop.wav", &p).unwrap().buffer,
             run(&wav, "200 loop.wav", &p).unwrap().buffer
         );
+    }
+
+    #[test]
+    fn planning_and_running_agree_about_everything_that_is_timing() {
+        // The whole justification for a cheap stage: it may skip the audio, but
+        // it must not decide anything differently. Every field here comes from
+        // the grid and the parameters, never from a sample.
+        let bytes = file(8, None);
+        let wav = Wav::parse(&bytes).expect("parse");
+        let params = Params {
+            bpm: Some(Tempo::bpm(200).expect("tempo")),
+            target_bpm: Some(Tempo::bpm(100).expect("tempo")),
+            tape: crate::ops::TapeParams::default(),
+            ..Params::default()
+        };
+
+        let full = run_staged(&wav, "loop.wav", &params, Stage::Full).expect("full");
+        let plan = run_staged(&wav, "loop.wav", &params, Stage::Plan).expect("plan");
+
+        assert_eq!(plan.tempo, full.tempo);
+        assert_eq!(plan.bars, full.bars);
+        assert_eq!(plan.skip_bars, full.skip_bars);
+        assert_eq!(plan.region, full.region);
+        assert_eq!(plan.loop_frames, full.loop_frames);
+        assert_eq!(plan.short_by, full.short_by);
+        assert_eq!(plan.ratio, full.ratio);
+        assert_eq!(plan.final_tempo, full.final_tempo);
+        assert_eq!(plan.fade.frames, full.fade.frames);
+
+        // The length is the point: it comes from the grid at the new tempo in
+        // both stages, so a UI can report it before anything has been resampled.
+        assert_eq!(plan.output_frames, full.output_frames);
+        assert_eq!(full.output_frames, full.buffer.frames());
+        assert_eq!(plan.output_frames, 16 * BAR);
+    }
+
+    #[test]
+    fn planning_leaves_the_audio_alone() {
+        let bytes = file(8, None);
+        let wav = Wav::parse(&bytes).expect("parse");
+        let params = Params {
+            bpm: Some(Tempo::bpm(200).expect("tempo")),
+            target_bpm: Some(Tempo::bpm(100).expect("tempo")),
+            ..Params::default()
+        };
+        let plan = run_staged(&wav, "loop.wav", &params, Stage::Plan).expect("plan");
+
+        // The buffer is the cut loop before varispeed — half the reported
+        // length. Anyone reading `buffer` in this stage is reading the wrong
+        // thing, which is why `output_frames` exists and is checked above.
+        assert_eq!(plan.stage, Stage::Plan);
+        assert_eq!(plan.buffer.frames(), 8 * BAR);
+        assert!(plan.tape.is_noop());
+    }
+
+    #[test]
+    fn planning_reports_the_normalise_gain_without_applying_it() {
+        let bytes = file(4, None);
+        let wav = Wav::parse(&bytes).expect("parse");
+        let params = Params {
+            bpm: Some(Tempo::bpm(200).expect("tempo")),
+            normalize: true,
+            ..Params::default()
+        };
+
+        let full = run_staged(&wav, "loop.wav", &params, Stage::Full).expect("full");
+        let plan = run_staged(&wav, "loop.wav", &params, Stage::Plan).expect("plan");
+
+        let (plan_gain, plan_before) = plan.normalized.expect("a gain was planned");
+        let (full_gain, full_before) = full.normalized.expect("a gain was applied");
+        // At unity there is no resampling between them, so the two agree
+        // exactly — the planned gain is not an estimate, it is the same
+        // division `gain::normalize` would do.
+        assert!((plan_gain - full_gain).abs() < 1e-12, "{plan_gain} vs {full_gain}");
+        assert!((plan_before - full_before).abs() < 1e-12);
+    }
+
+    #[test]
+    fn planning_says_whether_dither_would_apply() {
+        let bytes = file(4, None);
+        let wav = Wav::parse(&bytes).expect("parse");
+        let base = Params {
+            bpm: Some(Tempo::bpm(200).expect("tempo")),
+            ..Params::default()
+        };
+
+        // 24-bit source down to 16 dithers; staying at 24 does not.
+        let down = Params { depth: BitDepth::Int16, ..base.clone() };
+        let plan = run_staged(&wav, "loop.wav", &down, Stage::Plan).expect("plan");
+        let full = run_staged(&wav, "loop.wav", &down, Stage::Full).expect("full");
+        assert!(plan.dither.is_some());
+        assert_eq!(plan.dither.map(|(m, _)| m), full.dither.map(|(m, _)| m));
+        assert_eq!(
+            plan.dither.map(|(_, a)| a.lsb),
+            full.dither.map(|(_, a)| a.lsb),
+            "the reported LSB must be the writer's own grid"
+        );
+
+        let same = run_staged(&wav, "loop.wav", &base, Stage::Plan).expect("plan");
+        assert!(same.dither.is_none(), "no depth drop, no dither");
     }
 }

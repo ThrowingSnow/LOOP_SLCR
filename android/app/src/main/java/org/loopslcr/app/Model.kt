@@ -64,6 +64,8 @@ data class Plan(
     val outputFrames: Long,
     val peak: Double,
     val clips: Boolean,
+    /** True when the peak was measured before varispeed — see `Stage::Plan`. */
+    val peakBeforeVarispeed: Boolean,
     val tape: Boolean,
     val normalizeGain: Double?,
     val dithered: Boolean,
@@ -89,6 +91,7 @@ data class Plan(
             outputFrames = o.getLong("outputFrames"),
             peak = o.getDouble("peak"),
             clips = o.getBoolean("clips"),
+            peakBeforeVarispeed = o.optBoolean("peakBeforeVarispeed", false),
             tape = o.getBoolean("tape"),
             normalizeGain = o.optDoubleOrNull("normalizeGain"),
             dithered = o.getBoolean("dithered"),

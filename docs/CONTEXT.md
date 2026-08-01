@@ -972,3 +972,34 @@ Ein Sweep mit `loopslcr info` über alle 279 Einträge (Details siehe
   löscht die Klasse — `Engine`, `Calculator` und `Markers` verschwanden so.
   Konsequenz sauber benannt: der Lauf beweist die JNI-Regeln, das gepackte
   `.so` und das signierte APK — nicht das geschrumpfte Kotlin.
+
+---
+
+## 17. Der Samsung-Fehler, aufgeklärt
+
+Zwei getrennte Sachen, beide bestätigt durch den Screenshot vom Gerät.
+
+- **`h1 was cancelled`** ist eine `CancellationException` aus Kotlin-Coroutines,
+  im Release-Build zu `h1` obfuskiert. Mein `catch (e: Throwable)` fing den
+  Abbruch mit und zeigte ihn als Fehler. Jede Einstellungsänderung bricht die
+  laufende Neuberechnung ab — daher „manchmal". Zwei Dinge waren falsch: den
+  Abbruch als Fehler zu melden, und ihn zu schlucken statt weiterzuwerfen. Wer
+  eine `CancellationException` schluckt, lässt die Coroutine-Maschinerie
+  glauben, ein abgebrochener Job lebe noch.
+- **Die Latenz war ein Designfehler.** `plan` ließ die *ganze* Pipeline laufen,
+  inklusive Resampling, nur um Zahlen zu melden. Gemessen auf der Referenzdatei:
+  **6,6 s** mit Varispeed gegen **0,065 s** ohne. Auf einem Telefon leicht das
+  Zehnfache — pro Reglerbewegung.
+- **`pipeline::Stage::Plan`** hält nach den Entscheidungen und den billigen
+  Operationen an: Cut und Fade sind Kopien, Resampling, Tape und Dither
+  entfallen. Gemessen: **33 ms gegen 6,26 s**, Faktor 189.
+- **Was dabei exakt bleibt:** alles Zeitliche. Die Ausgabelänge kommt aus
+  `grid.resampled_length` statt aus `buffer.frames()`, ist also in beiden Stufen
+  dieselbe Zahl. Ein Test vergleicht Feld für Feld.
+- **Was es kostet, und wo es steht:** der Peak wird vor dem Varispeed gemessen.
+  Der Resampler überschwingt um Bruchteile eines dB — die fehlen. Steht als
+  `peakBeforeVarispeed` im JSON und als „(before varispeed)" auf dem Schirm.
+  Der Normalisierungsfaktor dagegen ist keine Schätzung: `gain::normalize`
+  rechnet genau diese Division, bevor es ein Sample anfasst.
+- **Der CLI-Dry-Run bleibt vollständig.** Dort ist der exakte Peak vor dem
+  Schreiben sechs Sekunden wert; auf dem Telefon bewegt sich ein Finger.

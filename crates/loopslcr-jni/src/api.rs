@@ -148,7 +148,10 @@ pub fn process(bytes: &[u8], name: &str, params: &str) -> Result<Vec<u8>, String
 pub fn plan(bytes: &[u8], name: &str, params: &str) -> Result<String, String> {
     let wav = Wav::parse(bytes).map_err(|e| e.to_string())?;
     let (params, _) = params_from_json(params)?;
-    let outcome = pipeline::run(&wav, name, &params).map_err(|e| e.to_string())?;
+    // The cheap stage. A UI calls this while a finger is still moving, and the
+    // full run resamples: 6.6 seconds against 0.065 on the reference file.
+    let outcome = pipeline::run_staged(&wav, name, &params, pipeline::Stage::Plan)
+        .map_err(|e| e.to_string())?;
 
     let mut out = Object::new();
     out.number("tempo", outcome.tempo.value().to_f64())
@@ -167,10 +170,15 @@ pub fn plan(bytes: &[u8], name: &str, params: &str) -> Result<String, String> {
         .bool("ratioExact", outcome.ratio.is_exact())
         .number("semitones", outcome.ratio.semitones())
         .number("resultingTempo", outcome.final_tempo.value().to_f64())
-        .integer("outputFrames", outcome.buffer.frames() as i64)
+        .integer("outputFrames", outcome.output_frames as i64)
         .number("peak", outcome.peak.value)
         .bool("clips", outcome.peak.clips())
-        .bool("tape", !outcome.tape.is_noop())
+        // In the planning stage the character is not applied, so what can be
+        // reported is whether it *would* be — a decision about parameters.
+        .bool("tape", params.tape.enabled)
+        // The peak was measured before the varispeed, so a resampler's
+        // overshoot is not in it. Named rather than implied.
+        .bool("peakBeforeVarispeed", outcome.stage == pipeline::Stage::Plan)
         .maybe_number("normalizeGain", outcome.normalized.map(|(g, _)| g))
         .bool("dithered", outcome.dither.is_some());
     Ok(out.render())
