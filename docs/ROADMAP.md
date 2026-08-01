@@ -9,7 +9,9 @@
 > → write, and `loopslcr batch` puts the 279-file archive through it in 1.3
 > seconds. M5 is under way: the Android toolchain is installed, `loopslcr-jni`
 > is done including the preview engine, and the APK builds, installs and runs —
-> both tabs work end to end and the loop can be ridden by ear. Last updated 30.07.2026.
+> both tabs work end to end, the loop can be ridden by ear, the cut markers drag
+> against the bar grid, and the shrunk 2.4 MB release build passes the whole
+> instrumented suite. Last updated 01.08.2026.
 
 ## Vision
 
@@ -324,10 +326,10 @@ worth exactly as much as its regression check.
 
 ## v1.0 — Android APK
 
-> **The toolchain is installed and the APK builds, installs and runs.** See
-> `docs/TOOLCHAIN.md`. What is done is the whole offline path: pick a file,
-> analyse it, see it, set the cut, export it. What is not is the preview engine —
-> the only part that needs an audio thread — and the calculator tab.
+> **Both tabs work, the loop plays, and the shrunk release build passes the
+> whole instrumented suite.** See `docs/TOOLCHAIN.md` for how to build and test
+> it. What remains is refinement — more overrides on the cutter, an export sheet,
+> a play head that can be dragged — and CI.
 
 - [x] `loopslcr-jni` cdylib, `cargo-ndk` integration
 - [x] Gradle ↔ cargo build wiring (`:app:cargoNdk`, inputs declared)
@@ -341,7 +343,8 @@ worth exactly as much as its regression check.
 - [ ] **Tab: CUTTER**
   - [x] Waveform view from Rust peak buckets
   - [x] Cut region shown as an overlay with markers
-  - [ ] Draggable markers (currently the region follows the settings, not a drag)
+  - [x] Draggable markers — they snap to bar lines, which is the only way a
+        finger is allowed near a cut point
   - [x] Loop bars, skip bars, workflow selector
   - [ ] BPM and signature overrides, BPM unit
   - [ ] Tail mode selector with auto-detect suggestion
@@ -369,7 +372,12 @@ worth exactly as much as its regression check.
   - [ ] Draggable play head (seek exists; nothing drives it from the waveform yet)
 - [x] Dark theme
 - [x] Instrumented tests: the engine on a real Android runtime, the screen rendered
-- [ ] GitHub Actions: signed release APK on tag push
+- [x] Shrunk, signed release build — R8 rules keep the JNI entry points, and
+      `-PtestRelease` runs all 25 instrumented tests against the shrunk APK
+- [x] Large files survive: read straight into a direct buffer, `OutOfMemoryError`
+      caught and reported instead of killing the app
+- [ ] Stream rather than decode whole — the real fix for long files
+- [ ] GitHub Actions: release APK on tag push
 
 ---
 
@@ -412,7 +420,7 @@ worth exactly as much as its regression check.
 | M2 | v0.2 Varispeed, bit depth, dither, BPM tagging | **DONE** bar noise-shaped dither |
 | M3 | v0.3 Tape character with loop-periodic modulation | **DONE** |
 | M4 | v0.4 Batch processing, CLI feature-complete | **DONE** |
-| M5 | v1.0 Android APK, two tabs, tape-riding preview | **IN PROGRESS** — both tabs and the preview run; draggable markers and the release build open |
+| M5 | v1.0 Android APK, two tabs, tape-riding preview | **IN PROGRESS** — both tabs, preview, draggable markers and a signed release build; CI open |
 | M6 | v1.1 Saturation (oversampling + ADAA) | TODO |
 | M7 | v2.0 Slice export, Elektron export, desktop GUI | TODO |
 

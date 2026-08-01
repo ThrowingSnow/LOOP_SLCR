@@ -11,7 +11,15 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+        A large heap because the file is decoded whole: a five-minute stereo
+        file at 48 kHz becomes about 230 MB of 64-bit samples before the
+        pipeline copies it once. This is a request, not a guarantee — the app
+        still has to survive being refused, which is why the failure path
+        catches Throwable rather than Exception.
+    -->
     <application
+        android:largeHeap="true"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"

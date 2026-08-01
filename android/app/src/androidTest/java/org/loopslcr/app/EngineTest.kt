@@ -26,7 +26,10 @@ import kotlin.math.sin
 class EngineTest {
 
     private val name = "200 loop.wav"
-    private val wav = wav(bars = 8)
+    private val raw = wav(bars = 8)
+
+    /** A fresh direct buffer each time: the tests hand the same file to many calls. */
+    private val wav: ByteBuffer get() = org.loopslcr.Native.direct(raw)
 
     @Test
     fun the_library_loads_and_reports_its_version() {
@@ -92,14 +95,14 @@ class EngineTest {
 
     @Test
     fun a_bad_file_fails_with_something_readable() {
-        val e = runCatching { Engine.analyze("not a wave file".toByteArray(), "x.wav") }.exceptionOrNull()
+        val e = runCatching { Engine.analyze(org.loopslcr.Native.direct("not a wave file".toByteArray()), "x.wav") }.exceptionOrNull()
         assertTrue(e is IllegalStateException)
         assertTrue(!e!!.message.isNullOrEmpty())
     }
 
     @Test
     fun a_preview_produces_sound_and_frees_cleanly() {
-        val handle = org.loopslcr.Native.previewCreate(org.loopslcr.Native.direct(wav), name, "{}")
+        val handle = org.loopslcr.Native.previewCreate(wav, name, "{}")
         assertTrue(handle != 0L)
         try {
             val info = org.json.JSONObject(org.loopslcr.Native.previewInfo(handle))
@@ -126,7 +129,7 @@ class EngineTest {
         // Reading exactly twice the loop length must land back where it started.
         // A preview that drifts by a sample per pass is a preview that lies
         // about the one property the tool exists to guarantee.
-        val handle = org.loopslcr.Native.previewCreate(org.loopslcr.Native.direct(wav), name, "{}")
+        val handle = org.loopslcr.Native.previewCreate(wav, name, "{}")
         try {
             val frames = org.json.JSONObject(org.loopslcr.Native.previewInfo(handle)).getLong("frames")
             val block = ByteBuffer.allocateDirect(1024 * 2 * 4).order(ByteOrder.nativeOrder())

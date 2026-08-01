@@ -898,3 +898,77 @@ Ein Sweep mit `loopslcr info` über alle 279 Einträge (Details siehe
   Lücke sofort, als `UnsatisfiedLinkError` beim ersten Aufruf. Jetzt lädt der
   statische Initialisierer der Klasse, die die Methoden deklariert; damit gibt
   es keinen Pfad, der es vergessen kann.
+
+---
+
+## 15. Ziehbare Marker und der Release-Build
+
+- **Die Marker rasten auf Taktlinien ein.** Das ist keine Bequemlichkeit,
+  sondern die einzige Art, wie ein Finger überhaupt an einen Schnittpunkt darf.
+  Die Schnittpunkte kommen aus exakter Bruchrechnung über einen Takt-*Index*;
+  ließe man eine Fingerspitze ein beliebiges Frame benennen, bekäme der Loop
+  eine Länge, die kein Tempo teilt — genau die Drift, gegen die das Tool
+  gebaut ist. Ein Zug wählt also einen Takt, den Rest macht das Raster.
+- **Die Taktlänge zum Umrechnen Pixel → Takt kommt aus dem Plan und ist
+  gerundet.** Das ist in Ordnung: sie zeigt, sie schneidet nicht. Egal auf
+  welchem Takt der Finger landet, der Schnitt selbst kommt aus dem exakten Grid.
+- **Welcher Marker gegriffen wurde, wird einmal beim Drag-Start entschieden.**
+  Pro Bewegung neu zu entscheiden hieße, dass ein schneller Zug die Geste
+  mittendrin an den anderen Marker übergibt und die Loop-Enden vertauscht.
+- **R8 ist die Stelle, an der eine JNI-App normalerweise bricht.** Nichts im
+  Kotlin ruft `Java_org_loopslcr_Native_analyze` — das tut der Linker zur
+  Laufzeit, indem er ein Symbol gegen Klassen- und Methodennamen matcht. Ohne
+  Keep-Regeln schrumpft der Build tadellos, installiert tadellos und wirft bei
+  der ersten Datei. Zwei Regeln, weil sie verschiedene Fragen beantworten: die
+  Klasse behalten (Name bleibt) und die Member behalten (Methodennamen bleiben).
+- **Das Test-APK wird separat geschrumpft.** `proguardFiles` gilt der App,
+  die Instrumentierung bekommt ihren eigenen Durchlauf über `testProguardFiles`.
+  Das hat mich überrascht, deshalb steht es in einer eigenen Regel-Datei.
+- **`-PtestRelease` schaltet `testBuildType` um**, damit die ganze Suite gegen
+  den geschrumpften Build laufen kann. Eine falsche Keep-Regel fällt genau dort
+  auf und sonst nirgends.
+- **Der Signaturschlüssel liegt nicht im Repo und wird es nie.** `build.gradle.kts`
+  liest `keystore.properties`, falls vorhanden; fehlt sie, ist der Release-Build
+  eben unsigniert und beweist die Shrinker-Regeln trotzdem.
+
+- **Die Marker-Arithmetik ist nach `Markers` herausgezogen und getestet.** Sie
+  ist das einzige Rechnen in der ganzen App, das nicht in Rust passiert. Sie
+  produziert nie einen *Schnittpunkt*, nur `skip` und `bars` — schlimmstenfalls
+  also den falschen Takt, nie eine driftende Länge. Trotzdem getestet, weil
+  „schlimmstenfalls" die Sorte Behauptung ist, die still aufhört zu stimmen.
+
+---
+
+## 16. Was auf einem echten Telefon schiefgeht
+
+- **`OutOfMemoryError` ist ein `Error`, kein `Exception`.** Das `catch (e:
+  Exception)` im ViewModel ließ ihn durch, also starb die App statt eine
+  Meldung zu zeigen. Genau das Muster von „manchmal ein Fehler": es hängt an
+  der Dateilänge, nicht an der Bedienung.
+- **Die Größenordnung:** Die Datei wird ganz gehalten und in 64-Bit-Samples
+  dekodiert. Fünf Minuten Stereo bei 48 kHz sind ~230 MB, *bevor* die Pipeline
+  eine einzige Kopie macht. Die Referenzdatei (11 MB) wird zu 30 MB — harmlos;
+  eine lange Aufnahme nicht.
+- **Drei Gegenmaßnahmen, keine davon die eigentliche Lösung:** `largeHeap`,
+  Datei direkt in einen Direct-Buffer lesen (der Java-Heap hält jetzt gar keine
+  Kopie mehr), und `Throwable` fangen mit einer Meldung, die sagt *warum*.
+  Die eigentliche Lösung wäre streamen statt ganz dekodieren — das ist ein
+  eigenes Stück Arbeit und steht in der Roadmap.
+- **Ein `OutOfMemoryError` zu fangen ist normalerweise falsch**, weil der
+  Zustand danach unbekannt ist. Hier vertretbar aus einem Grund: alles, wozu
+  die Allokation gehörte, wird auf demselben Pfad fallengelassen. Datei,
+  dekodierter Puffer und Plan sind weg, übrig bleibt eine UI ohne offene
+  Datei — genau der Zustand, in dem die App startet.
+- **Die Kapazität des Direct-Buffers ist, was die native Seite liest**, nicht
+  Position oder Limit. Ein Puffer mit Reserve würde Rust angehängte Nullen als
+  Audio unterschieben — deshalb wird die Größe vorher beim Provider erfragt
+  und exakt so viel alloziert, und ein zu kurz gelesener Puffer ist ein Fehler
+  statt stiller Stille.
+- **`-PtestRelease` brauchte eine eigene Regeldatei, und die kostet
+  Aussagekraft.** Das Test-Framework löst Klassen über den Classloader der App
+  auf, und R8 hatte alles entfernt, was die App selbst nicht benutzt:
+  `androidx.tracing.Trace`, `kotlin.LazyKt`, `MonotonicFrameClock$DefaultImpls`,
+  `mutableIntObjectMapOf`. Dazu zieht R8 kleine Kotlin-Objekte inline und
+  löscht die Klasse — `Engine`, `Calculator` und `Markers` verschwanden so.
+  Konsequenz sauber benannt: der Lauf beweist die JNI-Regeln, das gepackte
+  `.so` und das signierte APK — nicht das geschrumpfte Kotlin.

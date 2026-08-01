@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModelProvider
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import java.nio.ByteBuffer
 
 /**
  * The one activity.
@@ -51,14 +52,59 @@ class MainActivity : ComponentActivity() {
      */
     private val openFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@registerForActivityResult
-        val bytes = runCatching {
-            contentResolver.openInputStream(uri)?.use { it.readBytes() }
-        }.getOrNull()
-        if (bytes == null) {
-            model.fail("could not read ${displayName(uri)}")
-            return@registerForActivityResult
+        val name = displayName(uri)
+        val loaded = runCatching { read(uri) }
+        loaded.fold(
+            onSuccess = { buffer ->
+                if (buffer == null) model.fail("could not read $name") else model.open(name, buffer)
+            },
+            onFailure = { model.fail(explain(it, "could not read $name")) },
+        )
+    }
+
+    /**
+     * Reads the file into memory Rust can use without a second copy.
+     *
+     * The file is the biggest thing in this app by a wide margin, so it is worth
+     * one round trip to the provider to learn its size: with the size known it
+     * goes straight into a direct buffer of exactly that length, and the Java
+     * heap never holds a copy at all. Without it, the bytes are read the ordinary
+     * way and copied once — correct, just twice the peak.
+     *
+     * The buffer's *capacity* is what the native side reads, so it has to be
+     * exactly the file: a buffer with slack would hand Rust trailing zeroes as
+     * though they were audio.
+     */
+    private fun read(uri: Uri): ByteBuffer? {
+        val size = sizeOf(uri)
+        contentResolver.openInputStream(uri).use { stream ->
+            if (stream == null) return null
+            if (size == null || size <= 0 || size > Int.MAX_VALUE) {
+                val bytes = stream.readBytes()
+                return ByteBuffer.allocateDirect(bytes.size).put(bytes).rewind() as ByteBuffer
+            }
+            val buffer = ByteBuffer.allocateDirect(size.toInt())
+            val chunk = ByteArray(64 * 1024)
+            while (buffer.hasRemaining()) {
+                val read = stream.read(chunk, 0, minOf(chunk.size, buffer.remaining()))
+                if (read <= 0) break
+                buffer.put(chunk, 0, read)
+            }
+            if (buffer.hasRemaining()) {
+                // The provider's size was a lie, or the file shrank mid-read.
+                // Handing the native side a partly filled buffer would present
+                // the unwritten tail as silence, so say so instead.
+                return null
+            }
+            return buffer.rewind() as ByteBuffer
         }
-        model.open(displayName(uri), bytes)
+    }
+
+    private fun sizeOf(uri: Uri): Long? {
+        contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) return cursor.getLong(0)
+        }
+        return null
     }
 
     /** Writing: the same, in the other direction. */
@@ -151,6 +197,7 @@ class MainActivity : ComponentActivity() {
                             playing = playing,
                             playHead = head,
                             onPlay = { model.togglePlay() },
+                            onDragMarker = { marker, at -> model.dragMarker(marker, at) },
                             onOpen = {
                                 // Not `audio/*`: a WAVE file a device has decided
                                 // is `application/octet-stream` would be

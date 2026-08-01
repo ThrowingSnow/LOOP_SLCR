@@ -53,6 +53,7 @@ fun CutterScreen(
     onOpen: () -> Unit,
     onExport: () -> Unit,
     onPlay: () -> Unit = {},
+    onDragMarker: ((Marker, Float) -> Unit)? = null,
     onChange: ((Settings) -> Settings) -> Unit,
     onDismissProblem: () -> Unit,
 ) {
@@ -85,6 +86,7 @@ fun CutterScreen(
                 frames = loaded.analysis.frames,
                 region = plan?.let { it.regionStart..it.regionEnd },
                 playHead = playHead,
+                onDrag = onDragMarker,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(150.dp),
@@ -103,7 +105,7 @@ fun CutterScreen(
                 if (playing) {
                     "the loop is playing — move the varispeed and it bends"
                 } else {
-                    "preview plays the cut at its own tempo"
+                    "drag a marker to move the cut — it snaps to bar lines"
                 },
                 color = Palette.dim,
                 fontSize = 11.sp,

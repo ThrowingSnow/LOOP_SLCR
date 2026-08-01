@@ -45,10 +45,10 @@ class PreviewPlayer {
      * Returns the error if there is one, rather than throwing: a preview that
      * cannot open is a message in the UI, not a crash.
      */
-    fun start(bytes: ByteArray, name: String, settings: Settings, ratio: Double): String? {
+    fun start(audio: ByteBuffer, name: String, settings: Settings, ratio: Double): String? {
         stop()
         return try {
-            handle = Native.previewCreate(Native.direct(bytes), name, settings.toJson())
+            handle = Native.previewCreate(audio, name, settings.toJson())
             val info = JSONObject(Native.previewInfo(handle))
             val channels = info.getInt("channels")
             val rate = info.getInt("sampleRate")
@@ -75,7 +75,7 @@ class PreviewPlayer {
             val trackBytes = maxOf(minBytes * 2, bytesPerFrame * 2048)
             blockFrames = (trackBytes / bytesPerFrame / 4).coerceAtLeast(128)
 
-            val audio = AudioTrack.Builder()
+            val output = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -87,14 +87,14 @@ class PreviewPlayer {
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
 
-            track = audio
-            audio.play()
+            track = output
+            output.play()
             running = true
             pump = Thread({ pump(channels) }, "loopslcr-preview").also { it.start() }
             null
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             stop()
-            e.message ?: "the preview could not start"
+            explain(e, "the preview could not start")
         }
     }
 

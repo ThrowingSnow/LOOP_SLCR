@@ -8,9 +8,16 @@ import java.nio.ByteBuffer
  * The native side, wrapped once.
  *
  * Everything the app knows about cutting loops lives in Rust. This object exists
- * so that exactly one place loads the library, exactly one place turns a
- * `byte[]` into the direct buffer the boundary wants, and exactly one place
- * decides what a failure looks like to the UI.
+ * so that exactly one place turns a result into a type the UI can hold, and
+ * exactly one place decides what a failure looks like.
+ *
+ * # Why every call takes a `ByteBuffer`
+ *
+ * A direct buffer is memory the JVM allocated outside the Java heap, which Rust
+ * reads in place. Taking a `ByteArray` here would mean copying the whole file
+ * into one on every call — and on a phone the file is the largest thing in the
+ * app by an order of magnitude. So the file is read into a direct buffer once,
+ * when it is opened, and that buffer is what everything else is handed.
  */
 object Engine {
     // The library is loaded by `Native`'s own static initialiser, not here.
@@ -19,24 +26,14 @@ object Engine {
 
     val version: String get() = Native.version()
 
-    fun analyze(bytes: ByteArray, name: String): Analysis =
-        Analysis.from(JSONObject(Native.analyze(direct(bytes), name)))
+    fun analyze(audio: ByteBuffer, name: String): Analysis =
+        Analysis.from(JSONObject(Native.analyze(audio, name)))
 
-    fun plan(bytes: ByteArray, name: String, settings: Settings): Plan =
-        Plan.from(JSONObject(Native.plan(direct(bytes), name, settings.toJson())))
+    fun plan(audio: ByteBuffer, name: String, settings: Settings): Plan =
+        Plan.from(JSONObject(Native.plan(audio, name, settings.toJson())))
 
-    fun process(bytes: ByteArray, name: String, settings: Settings): ByteArray =
-        Native.process(direct(bytes), name, settings.toJson())
+    fun process(audio: ByteBuffer, name: String, settings: Settings): ByteArray =
+        Native.process(audio, name, settings.toJson())
 
-    fun peaks(bytes: ByteArray, buckets: Int): FloatArray = Native.peaks(direct(bytes), buckets)
-
-    /**
-     * A direct buffer holding [bytes].
-     *
-     * The copy is here rather than at the boundary because the boundary must not
-     * copy: Rust reads a direct buffer in place. The JVM cannot hand out a
-     * pointer into a normal `byte[]` — the collector may move it — so the copy
-     * is the price of reading the file without a second one on the native side.
-     */
-    private fun direct(bytes: ByteArray): ByteBuffer = Native.direct(bytes)
+    fun peaks(audio: ByteBuffer, buckets: Int): FloatArray = Native.peaks(audio, buckets)
 }

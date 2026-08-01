@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -72,11 +74,44 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    /**
+     * Release signing, if there is a key to sign with.
+     *
+     * Read from `keystore.properties`, which is not in the repository and never
+     * will be — a signing key in version control is a key anyone who clones can
+     * publish updates with. Without the file the release build is simply
+     * unsigned, which still builds and still proves the shrinker rules work.
+     */
+    val keystore = rootProject.file("keystore.properties")
+    val credentials = Properties().apply {
+        if (keystore.exists()) keystore.inputStream().use { load(it) }
+    }
+
+    signingConfigs {
+        if (keystore.exists()) {
+            create("release") {
+                storeFile = file(credentials.getProperty("storeFile"))
+                storePassword = credentials.getProperty("storePassword")
+                keyAlias = credentials.getProperty("keyAlias")
+                keyPassword = credentials.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // No shrinking yet: R8 would strip the JNI entry points unless told
-            // otherwise, and a rule kept honest needs an APK to test it against.
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+            // Only when the suite is being run against this build. See the file.
+            if (project.hasProperty("testRelease")) proguardFile("proguard-rules-under-test.pro")
+            // The instrumentation APK is shrunk in its own pass and does not
+            // inherit the rules above.
+            testProguardFiles("proguard-rules-test.pro")
+            if (keystore.exists()) signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -89,6 +124,17 @@ android {
     }
 
     buildFeatures { compose = true }
+
+    /**
+     * `./gradlew -PtestRelease connectedAndroidTest` runs the suite against the
+     * shrunk build.
+     *
+     * Worth having as a switch rather than a habit: the release build is the one
+     * where R8 has removed everything it could not see used, and the JNI entry
+     * points are reachable only through a name the linker resolves at run time.
+     * A rule that is wrong fails exactly there and nowhere else.
+     */
+    testBuildType = if (project.hasProperty("testRelease")) "release" else "debug"
 
     sourceSets["main"].jniLibs.srcDir(jniLibsDir)
 
@@ -121,5 +167,12 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
+    // Declares the empty host activity `createComposeRule` launches into. It is
+    // a debug-only artefact by design; under `-PtestRelease` the release build
+    // needs it too, or every Compose test fails with "unable to resolve
+    // activity" — a missing manifest entry, not a shrinking problem.
     debugImplementation(libs.compose.ui.test.manifest)
+    if (project.hasProperty("testRelease")) {
+        add("releaseImplementation", libs.compose.ui.test.manifest)
+    }
 }

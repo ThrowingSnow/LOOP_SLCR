@@ -32,15 +32,15 @@ class CutterScreenTest {
 
     @Test
     fun a_loaded_file_renders_with_its_waveform_and_its_numbers() {
-        val wav = EngineTest.wav(bars = 8)
-        val analysis = Engine.analyze(wav, "200 loop.wav")
-        val peaks = Engine.peaks(wav, 512)
-        val plan = Engine.plan(wav, "200 loop.wav", Settings())
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+        val plan = Engine.plan(org.loopslcr.Native.direct(raw), "200 loop.wav", Settings())
 
         compose.setContent {
             MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
                 CutterScreen(
-                    loaded = Loaded(name, wav, analysis, peaks),
+                    loaded = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks),
                     settings = Settings(tape = true),
                     plan = plan,
                     busy = Busy.Idle,

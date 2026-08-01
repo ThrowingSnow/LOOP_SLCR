@@ -62,6 +62,34 @@ declared, so a rebuild that only touched Kotlin skips it entirely.
 Always `--release` for the Rust side, even in a debug APK: a debug build of the
 resampler is not slow in the ordinary sense, it is unusable.
 
+## The release build
+
+```console
+$ cd android
+$ ./gradlew :app:assembleRelease
+```
+
+Shrunk by R8 to about 2.4 MB, against 12.3 MB for the debug build. Signing is
+optional: `build.gradle.kts` reads `keystore.properties` if it is there, and
+builds unsigned if it is not. **That file is gitignored and must stay that way** —
+a signing key in version control is a key anyone who clones the repository can
+publish updates with.
+
+```properties
+storeFile=/path/outside/the/repo/release.jks
+storePassword=…
+keyAlias=…
+keyPassword=…
+```
+
+Shrinking is where a JNI app usually breaks. Nothing in the Kotlin calls
+`Java_org_loopslcr_Native_analyze`; the linker does, at run time, by matching a
+symbol in the shared library against a class and method name. R8 cannot see
+that, so without keep rules the build shrinks perfectly, installs perfectly, and
+throws on the first file opened. The rules are in `app/proguard-rules.pro` —
+and in `app/proguard-rules-test.pro`, because the instrumentation APK is shrunk
+in a separate pass that does not inherit them.
+
 ## Testing on a device or emulator
 
 ```console
@@ -84,6 +112,13 @@ screen, writing a screenshot to the app's `filesDir`:
 
 ```console
 $ adb exec-out run-as org.loopslcr.app cat files/cutter.png > cutter.png
+```
+
+To run the same suite against the **shrunk** build, which is the only place a
+wrong keep rule shows up:
+
+```console
+$ ./gradlew -PtestRelease :app:connectedAndroidTest
 ```
 
 ## Building the native library on its own

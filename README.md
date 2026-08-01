@@ -231,10 +231,12 @@ depth, watch the dry run update as you go, and export.
 No permissions are asked for. The file arrives because the user handed it over,
 and nothing else on the device is readable.
 
-All of the audio is the same Rust core the CLI uses, reached through a JNI
-surface of five calls. Nothing about timing, cutting or resampling is
-reimplemented in Kotlin — the UI decides what to ask for and shows what came
-back, and that is all it does.
+All of the audio is the same Rust core the CLI uses, reached across a narrow JNI
+surface. Nothing about timing, cutting or resampling is reimplemented in Kotlin
+— the UI decides what to ask for and shows what came back, and that is all it
+does. The one exception is turning a fingertip into a bar index, which is
+extracted into `Markers` and tested, because arithmetic that cannot be tested is
+arithmetic that is wrong later.
 
 **The loop can be ridden by ear.** Press play and the cut plays at its own
 tempo; move the varispeed and the pitch bends rather than jumping, because the
@@ -260,7 +262,34 @@ A reimplementation in Kotlin would have agreed for a while and then, at some
 tempo nobody tested, quietly not — and being right about exactly this is the
 whole job.
 
-Still to come: draggable cut markers and a signed release build.
+**The markers are draggable, and they snap to bar lines.** That is not a
+convenience — it is the only way a fingertip is allowed near a cut point. The
+cut comes from exact rational arithmetic over a bar *index*; letting a finger
+name an arbitrary frame would hand the loop a length no tempo divides, which is
+the drift this tool exists to remove. So a drag picks a bar and the grid does
+the rest.
+
+The release build is shrunk by R8 to **2.4 MB** and signed. Shrinking is where a
+JNI app usually breaks: nothing in the Kotlin calls
+`Java_org_loopslcr_Native_analyze` — the linker does, at run time, by matching a
+symbol against a class and method name R8 cannot see used. Without keep rules it
+shrinks perfectly, installs perfectly, and throws on the first file opened.
+`./gradlew -PtestRelease connectedAndroidTest` runs the whole instrumented suite
+against the shrunk, signed APK — 25 tests, all green. It needs a handful of
+extra keeps of its own, because the test framework resolves classes through the
+app's classloader and R8 had already removed everything the app itself does not
+use. Those keeps and what they cost the claim are written down in
+`app/proguard-rules-under-test.pro`: the run proves the JNI rules, the packaged
+`.so` and the signed APK, and does not prove anything about shrunk Kotlin.
+
+**A whole file is held in memory and decoded to 64-bit samples**, so five
+minutes of 48 kHz stereo becomes about 230 MB before the pipeline copies it
+once. The file is read straight into a direct buffer, so the Java heap never
+holds a second copy, and the failure path catches `Throwable` rather than
+`Exception` — an `OutOfMemoryError` is an `Error`, and a `catch (e: Exception)`
+lets it through to kill the app instead of showing a message.
+
+Still to come: CI that builds a release APK on a tag.
 
 Build and test it with [`docs/TOOLCHAIN.md`](docs/TOOLCHAIN.md).
 
