@@ -251,6 +251,15 @@ store rather than a re-cut. Tape character is applied at unity, which makes a
 heavily transposed preview slightly brighter than the render, where the filters
 sit lower.
 
+Tape character *does* invalidate a preview, and wow and flutter are the only
+continuous controls that do — which is why the loop playing over itself was a
+bug only they could find. A rebuild runs the whole pipeline, longer than the
+replan debounce, so a second one began while the first was still going and both
+built an `AudioTrack` with a pump thread of its own. Starts and stops are now
+serialised, the build happens outside the lock so a tap on pause never waits for
+a preview it is discarding, and the play position survives the rebuild so a
+slider adjusts the sound instead of retriggering it.
+
 **The calculator tab does no arithmetic.** It asks Rust and lays the answer out.
 Beat and bar lengths, the note-value table from 1/1 to 1/32 with dotted and
 triplet rows, in milliseconds, hertz and **samples** — and each row marked for
@@ -262,12 +271,29 @@ A reimplementation in Kotlin would have agreed for a while and then, at some
 tempo nobody tested, quietly not — and being right about exactly this is the
 whole job.
 
+**A file that declares no tempo can still be cut.** Fourteen of the archive's
+279 files carry one nowhere — not in an `acid` chunk, not in the name — and the
+pipeline refuses them, correctly. The cutter has a BPM field, a signature and a
+BPM unit for exactly that, and it says which one it is using: blank means the
+file speaks for itself. Alignment is a visible toggle too, loop priority against
+grid priority, with what each one means written next to it.
+
 **The markers are draggable, and they snap to bar lines.** That is not a
 convenience — it is the only way a fingertip is allowed near a cut point. The
 cut comes from exact rational arithmetic over a bar *index*; letting a finger
 name an arbitrary frame would hand the loop a length no tempo divides, which is
 the drift this tool exists to remove. So a drag picks a bar and the grid does
 the rest.
+
+What lies outside the cut is dimmed, which is drawn *after* the waveform — under
+it, the bars painted straight over the shading, and no emulator test caught that
+because there the cut was always the whole file. It is checked in pixels now.
+
+While a marker is held it is drawn where the finger is, snapped to the bar it
+will land on — a promise rather than a report, since the plan behind it is a
+debounce and a native call away. And the gesture is keyed on the file, not on
+the region: keying it on the region meant the drag's own effect tore down the
+handler mid-drag, so the finger kept moving and nothing followed.
 
 The release build is shrunk by R8 to **2.4 MB** and signed. Shrinking is where a
 JNI app usually breaks: nothing in the Kotlin calls

@@ -27,10 +27,25 @@ About 6 GB in total: SDK, NDK, emulator and system image, plus the JDK and
 Gradle. Only the wrapper is committed — `android/gradlew` downloads Gradle
 itself, so the copy in `~/opt` is just what generated it.
 
-**JDK 21, not 26.** The system JDK is 26 and the Android Gradle Plugin does not
-run on it. 21 is the current LTS the Android tooling targets, so it is installed
-alongside rather than replacing anything — `JAVA_HOME` decides which one is used
-and the system one is left as it was.
+**JDK 21, not 26 — and `JAVA_HOME` is not enough.** The system JDK is 26, and on
+2026-07-21 it moved to 26.0.2, at which point the build stopped compiling with
+`java.lang.IllegalArgumentException: 26.0.2` and no other clue. It is Gradle's
+own Kotlin DSL compiler failing to parse that version string while compiling the
+`.gradle.kts` files themselves — so it happens before any project setting can
+take effect, and a toolchain declared inside the project cannot rescue it.
+
+Two levels, kept apart on purpose:
+
+- **The daemon** runs on a JDK 21 named by `org.gradle.java.home` in the *user's*
+  `~/.gradle/gradle.properties`. Deliberately not in the repository: an absolute
+  path on one machine does not belong in a shared project. Undo it by deleting
+  the line and the JDK directory; nothing tracked changes.
+- **The compilers** run on a JDK that Gradle fetches itself — `jvmToolchain(17)`
+  in `app/build.gradle.kts` with the foojay resolver in `settings.gradle.kts`.
+  This one *is* committed, because a build that works only with a given week's
+  system packages is not a build.
+
+Installed alongside rather than replacing anything; the system JDK is untouched.
 
 **AGP 8.13.2, and the AndroidX versions pinned to match it.** The newest
 AndroidX releases require AGP 9 and `compileSdk` 37; moving to those would mean

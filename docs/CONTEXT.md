@@ -1003,3 +1003,149 @@ Zwei getrennte Sachen, beide bestätigt durch den Screenshot vom Gerät.
   rechnet genau diese Division, bevor es ein Sample anfasst.
 - **Der CLI-Dry-Run bleibt vollständig.** Dort ist der exakte Peak vor dem
   Schreiben sechs Sekunden wert; auf dem Telefon bewegt sich ein Finger.
+
+---
+
+## 18. Die Lücke, die beim Nachsehen auffiel
+
+- **Die App konnte kein Quell-Tempo setzen.** `Settings` hatte kein `bpm`,
+  `sig`, `bpmUnit` oder `align` — obwohl die JNI-Fläche sie längst annahm.
+  Folge: eine Datei ohne Tempo im Namen und ohne `acid`-Chunk war auf dem
+  Telefon *unbenutzbar*. Die Pipeline verweigert sie zu Recht, und es gab
+  nichts, womit man hätte antworten können. Im Archiv betrifft das 14 von 279.
+- **Das Feld bleibt leer, solange die Datei es selbst weiß.** Ein vorgefülltes
+  Feld lädt dazu ein, etwas zu ändern, das schon stimmte. Was gerade gilt,
+  steht als `supportingText` darunter — nicht als Placeholder, denn Material
+  zeigt den erst bei Fokus, und „was sagt die Datei" will man wissen, *bevor*
+  man tippt.
+- **Die Varispeed-Anzeige kommt aus dem Plan, nicht aus dem Regler.** Das
+  Verhältnis ist oft ein Bruch, den der Slider nur annähert; 90/103 ist die
+  Zahl, die zählt. Drei Einheiten nebeneinander, weil es ein Wert unter drei
+  Namen ist: Halbtöne für Musiker, Prozent für die Bandmaschine, BPM für den
+  Sequencer.
+- **Ein Test war falsch, nicht der Code:** bei halbem Tempo ist der Takt doppelt
+  so lang, dieselbe Datei liest sich als 4 statt 8 Takte — gleiche Frames,
+  anderes Raster darunter. Dass die *Anzahl* sich ändert, ist der Beweis, dass
+  die Überschreibung im Grid ankam.
+
+---
+
+## 19. Warum sich die Marker nicht ziehen ließen
+
+Vom Gerät gemeldet, und es waren zwei Fehler in einem.
+
+- **Der Gesten-Handler brach durch seine eigene Wirkung ab.**
+  `Modifier.pointerInput(frames, region.first, region.last)` — auf die Region
+  geschlüsselt. `pointerInput` startet neu, sobald ein Key sich ändert, und ein
+  Neustart bricht die laufende Geste ab. Der Zug verschiebt die Region, also
+  riss er sich selbst ab: der Finger bewegte sich weiter, es folgte nichts.
+  Jetzt auf `frames` geschlüsselt (ändert sich nur bei einer anderen Datei),
+  die aktuelle Region kommt über `rememberUpdatedState` herein.
+- **Die Linie folgte der Pipeline statt dem Finger.** Gezeichnet wurde aus dem
+  Plan — also 250 ms Debounce plus nativer Aufruf hinter der Berührung, mit
+  Gummiband-Effekt, wenn die Antwort ankam. Solange gezogen wird, sitzt der
+  Marker jetzt am Finger, gerastet auf den Takt, auf dem er landen wird. Beide
+  Richtungen gehen durch `Markers.barAt` / `fractionOfBar`, damit die Linie
+  keine Position verspricht, die das Commit anders rundet.
+- **Griffe statt Linien.** Zwei Pixel sind zum Anschauen, nicht zum Anfassen.
+  Der gehaltene Marker wird grün und breiter, damit der Finger weiß, welchen er
+  erwischt hat.
+- **Der erste Regressionstest fing den Fehler nicht** — und das war die
+  lehrreichste Stelle. `performTouchInput` schickt eine ganze Gestenfolge in
+  einem Block ab, ohne dass Compose dazwischen neu zeichnet; der Handler sah den
+  Zustand also nie, an dem er zerbrach. Erst aufgeteilt in einen Block pro
+  Bewegung mit `waitForIdle()` dazwischen — wie es in echt passiert — schlug er
+  an: **„only 1 move(s) arrived"** von vier. Gegen die reparierte Fassung grün.
+  Ein Regressionstest, den man nicht gegen den Fehler laufen gesehen hat, ist
+  eine Vermutung.
+
+---
+
+## 20. Was ein Bildschirmvideo vom Gerät zeigte
+
+Ein GIF von der echten Datei, und darin drei Dinge, die kein Emulator-Test
+hergegeben hätte.
+
+- **Die Abdunklung außerhalb des Schnitts fehlte — seit der ersten Fassung.**
+  Sie wurde *vor* der Waveform gezeichnet, also malten die Balken sie zu. Auf
+  dem Emulator fiel es nie auf, weil dort die Region immer die ganze Datei war:
+  es gab nichts außerhalb, das hätte dunkel sein müssen. Erst eine echte Datei
+  mit einem Teilschnitt zeigt es.
+- **Der Test dafür prüft jetzt Pixel**, nicht Struktur: die mittlere Helligkeit
+  einer Spalte außerhalb muss unter 80 % der Spalte innerhalb liegen. Gegen den
+  alten Zeichenfehler laufen gelassen: **145,22 gegen 145,23** — identisch, also
+  gar keine Abdunklung. Genau das, was ein Screenshot-Vergleich durchgehen ließ.
+- **Der gehaltene Marker trug die Farbe des Playheads.** Beide können
+  gleichzeitig zu sehen sein; zwei Dinge, die Verschiedenes bedeuten, dürfen
+  nicht gleich aussehen. Gehalten ist jetzt hellblau.
+- **Die Griffe waren in Pixeln bemessen.** Sechzehn Pixel sind auf einem Telefon
+  anderthalb Millimeter — eine Markierung, kein Ziel. Jetzt in dp.
+- **`peak 1.4998 — clips`** beim Foldback: erwartet und richtig gemeldet, denn
+  der Foldback addiert den Tail auf den Kopf. Nur stand daneben kein nächster
+  Schritt. Jetzt bietet die Plan-Karte in dem Moment „Normalize" als Knopf an.
+- **Der Drag funktioniert:** im Video stehen Taktzahlen wie 5, 7, 10 und 12, die
+  auf keinem Chip liegen — die können nur aus einem Zug stammen.
+
+## 21. Warum sich die Vorschau bei Tape überschlug
+
+Gemeldet als: „wenn ich Tape einstelle, fängt er an sich zu überschlagen/
+überlappen". Es war wörtlich zu nehmen — die Schleife lief zweimal
+gleichzeitig, phasenverschoben.
+
+**Die Kette.** Ein Neuaufbau der Vorschau lässt die ganze Pipeline laufen und
+dauert auf dem Telefon länger als die 250 ms Debounce des Replans. Also startete
+der zweite Neuaufbau, während der erste noch lief. `PreviewPlayer.start` begann
+mit `stop()`, und dieses Lesen-dann-Ersetzen über vier Felder war ungeschützt:
+der zweite Aufrufer fand `pump` und `track` noch `null`, weil der erste sie noch
+nicht zugewiesen hatte, räumte also nichts weg und baute einen **zweiten
+AudioTrack mit zweitem Pump-Thread** neben den ersten. Die Felder merkten sich
+danach nur den späteren — der frühere war nie wieder abschaltbar und las
+außerdem ein Handle, das das `stop()` des Überlebenden freigeben würde.
+
+**Warum nur Tape.** Wow und Flutter sind die einzigen *stufenlosen* Regler, die
+die Vorschau ungültig machen. Jede andere Einstellung, die das tut, ist ein Chip
+oder ein Schalter — ein Ereignis, kein Strom. Und Varispeed macht die Vorschau
+gar nicht ungültig, weil sie absichtlich nicht eingebacken ist (Abschnitt 13).
+Der Fehler konnte also gar nichts anderem gehören.
+
+**Der Fix, in drei Teilen.**
+
+- **Monitor auf `start` und `stop`.** Damit ist die Invariante lokal in der
+  Klasse und hängt nicht daran, dass jeder Aufrufer sich benimmt.
+- **Bauen außerhalb des Monitors.** `previewCreate` läuft so lange wie ein
+  Schnitt; hielte man das Schloss darüber, müsste ein Tippen auf Pause sekunden-
+  lang auf eine Vorschau warten, die es gerade wegwerfen will. Gebaut wird frei,
+  eingehängt unter dem Schloss — Mikrosekunden.
+- **Eine Warteschlange im View-Modell.** Ein `Mutex` plus abbrechbarer
+  `rebuild`-Job. Abbruch allein genügt nicht: eine abgebrochene Coroutine hält
+  einen bereits laufenden nativen Aufruf nicht an, sie kehrt zurück und wirft
+  erst auf dem Rückweg. Aufreihen heißt, der spätere Aufbau hängt zuletzt ein —
+  und das ist der, den der Finger gemeint hat.
+
+**Dazu die Position.** Ein Neuaufbau begann bei null, also triggerte jede
+Reglerstufe den Klang neu — als Stottern gehört, nicht als Regelung. Jetzt wird
+die Spielposition über den Neuaufbau hinweg gehalten; `seek` wickelt, also ist
+es immer eine Position, die die neue Vorschau auch hat.
+
+**Der Test zählt Threads, nicht Töne.** Die Audioausgabe eines Emulators ist
+keine Behauptung wert, der Thread, der sie füttert, aber sehr wohl: vier Threads
+starten gleichzeitig, danach muss genau **ein** `loopslcr-preview` leben. Gegen
+den Fehler laufen gelassen sagte er `expected:<1> but was:<4>`.
+
+## 22. Der Build hing am System-JDK
+
+Am 21.07.2026 ging das System-JDK auf 26.0.2, und der Build hörte auf zu
+übersetzen — mit `java.lang.IllegalArgumentException: 26.0.2` und sonst nichts.
+Es ist Gradles *eigener* Kotlin-DSL-Compiler, der die Versionsnummer nicht lesen
+kann, und zwar beim Übersetzen der `.gradle.kts`-Dateien selbst. Deshalb hilft
+keine Einstellung im Projekt: sie käme zu spät.
+
+Zwei Ebenen, getrennt gehalten:
+
+- **Der Daemon** läuft über `org.gradle.java.home` auf einem JDK 21. Das steht in
+  der *benutzereigenen* `~/.gradle/gradle.properties`, nicht im Repository —
+  ein absoluter Pfad einer Maschine gehört nicht in ein geteiltes Projekt.
+- **Die Compiler** laufen über `jvmToolchain(17)` auf einem JDK, das Gradle sich
+  selbst holt (foojay-Resolver in `settings.gradle.kts`). Das *gehört* ins
+  Repository: ein Build, der nur mit den Systempaketen einer bestimmten Woche
+  funktioniert, ist kein Build.

@@ -19,12 +19,26 @@ import java.nio.ByteOrder
  * happens on whatever thread called, and reaches the audio thread through the
  * native handle's atomics rather than through anything that could make it wait.
  *
- * # The one rule
+ * # The two rules
  *
  * **The handle is destroyed only after the audio thread has stopped.** A read
  * from a freed handle is undefined behaviour, and the window is exactly as long
  * as one block — which is to say it would happen rarely, on a device, in a way
  * that looks like a random crash. So [stop] joins before it frees, every time.
+ *
+ * **Only one thread may start or stop at a time.** [start] begins by stopping
+ * whatever was playing, and that read-then-replace runs over four fields. Two
+ * callers interleaving in it is not a subtle race: the second one's `stop` finds
+ * `pump` and `track` still null because the first has not assigned them yet,
+ * tears down nothing, and builds a second `AudioTrack` with a second pump thread
+ * beside the first. The fields then remember only the later of the two, so the
+ * earlier one can never be stopped again — the loop plays over itself, out of
+ * phase, until the process dies. It also leaves that orphaned thread reading a
+ * handle the survivor's `stop` will free.
+ *
+ * Hence the monitor on both. It is reentrant, so `start` calling `stop` is fine.
+ * It is held across a `join` of at most one block, and never across the pipeline
+ * run — the caller does that before it gets here.
  */
 class PreviewPlayer {
     private var handle = 0L
@@ -44,11 +58,32 @@ class PreviewPlayer {
      *
      * Returns the error if there is one, rather than throwing: a preview that
      * cannot open is a message in the UI, not a crash.
+     *
+     * Two steps on purpose. Building runs the whole pipeline and takes as long
+     * as a cut does; installing touches the fields and takes microseconds. Only
+     * the second is under the monitor, because a tap on pause must not wait for
+     * a preview it is trying to replace.
      */
     fun start(audio: ByteBuffer, name: String, settings: Settings, ratio: Double): String? {
+        val built = try {
+            Native.previewCreate(audio, name, settings.toJson())
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            stop()
+            return explain(e, "the preview could not start")
+        }
+        return install(built, ratio)
+    }
+
+    /** Swaps a freshly built handle in for whatever was playing. */
+    @Synchronized
+    private fun install(fresh: Long, ratio: Double): String? {
         stop()
+        // Before anything that can fail, so every failure path below reaches a
+        // `stop` that frees it rather than leaking a loop's worth of audio.
+        handle = fresh
         return try {
-            handle = Native.previewCreate(audio, name, settings.toJson())
             val info = JSONObject(Native.previewInfo(handle))
             val channels = info.getInt("channels")
             val rate = info.getInt("sampleRate")
@@ -163,6 +198,7 @@ class PreviewPlayer {
      * Idempotent, because a UI stops on pause, on a new file and on close, and
      * two of those regularly happen together.
      */
+    @Synchronized
     fun stop() {
         running = false
         pump?.let {

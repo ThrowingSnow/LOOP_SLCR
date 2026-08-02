@@ -120,6 +120,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlin {
+        // The JDK the compilers run *on*, provisioned by Gradle. Pinned because
+        // the system one is not ours to control: JDK 26 arrived and Kotlin
+        // 2.3.21 could not so much as parse its version string.
+        jvmToolchain(17)
         compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) }
     }
 

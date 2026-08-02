@@ -337,6 +337,10 @@ worth exactly as much as its regression check.
 - [x] JNI surface: `previewCreate/Read/SetRatio/Seek/Info/Destroy`
 - [x] Direct `ByteBuffer` transfer for PCM (no copies)
 - [x] Panic guard at every entry point, proved from Java on host *and* device
+- [x] Preview starts/stops serialised — a rebuild racing itself built a second
+      `AudioTrack` and pump thread, and the loop played over itself (found by the
+      tape sliders, the only continuous control that invalidates a preview)
+- [x] Build pinned to its own JDKs, so a system JDK bump cannot break it
 - [x] SAF file picking (`ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT`), no broad permissions
 - [x] Compose UI shell
 - [x] Two tabs, with a shared view model
@@ -344,14 +348,17 @@ worth exactly as much as its regression check.
   - [x] Waveform view from Rust peak buckets
   - [x] Cut region shown as an overlay with markers
   - [x] Draggable markers — they snap to bar lines, which is the only way a
-        finger is allowed near a cut point
+        finger is allowed near a cut point; with handles, and a line that
+        follows the finger rather than the pipeline
   - [x] Loop bars, skip bars, workflow selector
-  - [ ] BPM and signature overrides, BPM unit
+  - [x] BPM and signature overrides, BPM unit — without these a file that
+        declares no tempo could not be cut on the phone at all
   - [ ] Tail mode selector with auto-detect suggestion
-  - [ ] **Grid vs. loop priority — visible toggle**
+  - [x] **Grid vs. loop priority — visible toggle**
   - [x] Bipolar varispeed control, detent at 0
   - [x] Target-BPM entry as the other way to ask for the same thing
-  - [ ] Live readout in all three units (st/cents, % speed, BPM)
+  - [x] Live readout in all three units (st/cents, % speed, BPM), from the
+        plan rather than from the control
   - [x] Tape character panel + bypass
   - [x] Bit depth, normalize, snap, short-loop override
   - [ ] Export sheet: dither mode, tags, filename template

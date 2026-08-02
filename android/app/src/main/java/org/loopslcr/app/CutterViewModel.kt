@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
 import java.nio.ByteBuffer
@@ -117,6 +119,24 @@ class CutterViewModel : ViewModel() {
     /** The settings the running preview was built from, to know when to rebuild. */
     private var playingSettings: Settings? = null
 
+    /**
+     * One preview build at a time.
+     *
+     * Building runs the whole pipeline, which on a phone takes longer than the
+     * replan debounce — so a control that changes the loop *continuously* can
+     * ask for a second build while the first is still running. Only the tape
+     * sliders can: every other setting that invalidates a preview is a chip or a
+     * toggle, and speed does not invalidate it at all. That is why this bug
+     * belonged to tape and to nothing else.
+     *
+     * The lock rather than cancellation alone, because a cancelled coroutine
+     * does not abort a native call already in flight: it returns, throws on the
+     * way out, and leaves a built preview behind. Queueing them means the later
+     * build always installs last, which is the one the user asked for.
+     */
+    private val building = Mutex()
+    private var rebuild: Job? = null
+
     override fun onCleared() {
         player.stop()
         super.onCleared()
@@ -137,11 +157,14 @@ class CutterViewModel : ViewModel() {
         }
         val file = _loaded.value ?: return
         val wanted = _settings.value
-        viewModelScope.launch {
+        rebuild?.cancel()
+        rebuild = viewModelScope.launch {
             _busy.value = Busy.Working("starting the preview")
             val ratio = _plan.value?.ratio ?: 1.0
-            val problem = withContext(Dispatchers.Default) {
-                player.start(file.bytes, file.name, wanted, ratio)
+            val problem = building.withLock {
+                withContext(Dispatchers.Default) {
+                    player.start(file.bytes, file.name, wanted, ratio)
+                }
             }
             _busy.value = Busy.Idle
             if (problem == null) {
@@ -197,12 +220,22 @@ class CutterViewModel : ViewModel() {
         val built = playingSettings
         if (built != null && !built.sameLoopAs(wanted)) {
             val file = _loaded.value ?: return
-            viewModelScope.launch {
+            // Where the loop had got to. A rebuild that starts from zero
+            // retriggers the sound on every notch of a slider, which is heard as
+            // stuttering rather than as an adjustment. The length is unchanged
+            // unless the bars changed, and `seek` wraps, so this is always a
+            // position the new preview has.
+            val at = player.position()
+            rebuild?.cancel()
+            rebuild = viewModelScope.launch {
                 val ratio = plan?.ratio ?: 1.0
-                val problem = withContext(Dispatchers.Default) {
-                    player.start(file.bytes, file.name, wanted, ratio)
+                val problem = building.withLock {
+                    withContext(Dispatchers.Default) {
+                        player.start(file.bytes, file.name, wanted, ratio)
+                    }
                 }
                 if (problem == null) {
+                    at?.let { player.seek(it) }
                     playingSettings = wanted
                 } else {
                     _playing.value = false
@@ -226,7 +259,9 @@ class CutterViewModel : ViewModel() {
 
     fun open(name: String, bytes: ByteBuffer) {
         viewModelScope.launch {
-            // A new file is a different loop; whatever was playing is not it.
+            // A new file is a different loop; whatever was playing is not it,
+            // and neither is anything that was still being built for the old one.
+            rebuild?.cancel()
             player.stop()
             _playing.value = false
             playingSettings = null

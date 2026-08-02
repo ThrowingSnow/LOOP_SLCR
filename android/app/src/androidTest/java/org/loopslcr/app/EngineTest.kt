@@ -174,6 +174,43 @@ class EngineTest {
         player.stop()
     }
 
+    /**
+     * The bug a tape slider found: the loop playing over itself.
+     *
+     * Dragging wow or flutter invalidates the preview on every notch, and a
+     * rebuild runs the whole pipeline — longer than the replan debounce, so a
+     * second rebuild starts while the first is still going. `start` began by
+     * stopping whatever played, and two callers interleaving in that read-then-
+     * replace both found nothing to stop: two `AudioTrack`s, two pump threads,
+     * one set of fields remembering only the later. The earlier one could then
+     * never be stopped, and played on, out of phase, over the top.
+     *
+     * Counting threads rather than listening, because an emulator's audio output
+     * is not worth an assertion but the thread that feeds it is exactly the
+     * thing that must be unique.
+     */
+    @Test
+    fun starting_from_several_threads_at_once_leaves_one_audio_thread() {
+        val player = PreviewPlayer()
+        try {
+            val racers = List(4) {
+                Thread { player.start(wav, name, Settings(tape = true), 1.0) }
+            }
+            racers.forEach { it.start() }
+            racers.forEach { it.join(30_000) }
+
+            assertTrue(player.isPlaying)
+            assertEquals("one loop playing, not several", 1, pumpThreads())
+        } finally {
+            player.stop()
+        }
+        assertEquals("stopping left an audio thread behind", 0, pumpThreads())
+    }
+
+    /** Live pump threads, by the name [PreviewPlayer] gives them. */
+    private fun pumpThreads(): Int =
+        Thread.getAllStackTraces().keys.count { it.name == "loopslcr-preview" && it.isAlive }
+
     @Test
     fun the_calculator_and_the_cutter_agree_about_the_same_file() {
         // The reason the calculator is a native call. Both screens are asked
