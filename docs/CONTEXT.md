@@ -1199,3 +1199,27 @@ entscheiden, aber nicht so, dass er es nicht sieht, nicht versteht und nicht
   Bedienelement, also war das Erste, was man ändern konnte, einen Scroll weit
   weg. Jetzt liegen sie hinter dem Dateinamen, einen Tipp entfernt. Auf dem
   Bildschirm bleibt, woraus eine *Entscheidung* gefällt wird.
+
+## 25. Der Bildschirm nach dem, was man wirklich drückt
+
+Zwei Screenshots mit eingezeichneten Pfeilen, und der Punkt war beide Male
+derselbe: die Ecke gehört dem, was am häufigsten gedrückt wird.
+
+- **Play sitzt jetzt oben rechts, wo Open war.** Eine Datei wird einmal gewählt
+  und dann minutenlang gehört. Play ist außerdem das, wonach man greift,
+  *während* man die Waveform ansieht — also gehört es neben sie, nicht darunter.
+- **Open ist in die Info-Klappbox gewandert.** Es wirft jede Einstellung auf dem
+  Bildschirm weg und lag vorher unter dem Daumen.
+- **Die Abschnitte klappen zu.** Der Bildschirm ist eine einzige Spalte, und die
+  Varispeed lag fünf Gruppen tief: einen Regler erreichen hieß, die Waveform
+  oben rausschieben — genau das, was man beim Schieben ansehen will. Quelle und
+  Ausgabe sind jetzt zugeklappt vorbelegt (beides wird einmal gesetzt), die
+  Regler offen. `rememberSaveable`, damit eine Drehung nicht aufreißt, was
+  jemand zugeklappt hat.
+
+**Die Regel, die das Zuklappen überhaupt zulässig macht: Detail darf
+verschwinden, Ärger nicht.** Die zugeklappte Plan-Karte trägt weiter `clips`
+beziehungsweise `short by N`. Eine Karte, die „clips" verschlucken kann, wäre
+schlechter als eine, die sich nicht zuklappen lässt — denn die verborgene Zahl
+war der Grund hinzusehen. Gegen eine blind gemachte Karte laufen gelassen:
+`AssertionError: Failed: assertExists.`

@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,7 +67,7 @@ fun CutterScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Header(loaded, onOpen)
+        Header(loaded, busy, playing, onOpen, onPlay)
 
         if (problem != null) Problem(problem, onDismissProblem)
 
@@ -95,24 +96,17 @@ fun CutterScreen(
             )
         }
 
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedButton(onClick = onPlay, enabled = busy is Busy.Idle) {
-                Text(if (playing) "Stop" else "Play")
-            }
-            Text(
-                if (playing) {
-                    "the loop is playing — move the varispeed and it bends"
-                } else {
-                    "drag a marker to move the cut — it snaps to bar lines"
-                },
-                color = Palette.dim,
-                fontSize = 11.sp,
-            )
-        }
+        // The button went to the top; the sentence stays with the waveform it
+        // describes.
+        Text(
+            if (playing) {
+                "the loop is playing — move the varispeed and it bends"
+            } else {
+                "drag a marker to move the cut — it snaps to bar lines"
+            },
+            color = Palette.dim,
+            fontSize = 11.sp,
+        )
 
         // The file's own figures now live behind the name in [Header]; what
         // stays on screen is what a *decision* is made from. They were three
@@ -120,26 +114,42 @@ fun CutterScreen(
         // past to reach the thing you came for is a screen that buried it.
         if (plan != null) PlanCard(plan, settings, onChange)
 
-        SectionTitle("Source")
-        SourceControls(loaded.analysis, settings, onChange)
+        // Folded by default where the setting is normally read off the file and
+        // left alone; open where the sliders are, because those are what the
+        // preview is for.
+        Section(
+            "Source",
+            initiallyOpen = false,
+            summary = plan?.let { "${trim(it.tempo)} BPM · ${settings.sig}" },
+        ) {
+            SourceControls(loaded.analysis, settings, onChange)
+        }
 
-        SectionTitle("Loop")
-        BarsRow(settings, onChange)
-        SkipRow(settings, onChange)
-        WorkflowRow(settings, plan, onChange)
-        AlignRow(settings, onChange)
+        Section("Loop", summary = plan?.let { "${it.bars} bars from ${it.skipBars}" }) {
+            BarsRow(settings, onChange)
+            SkipRow(settings, onChange)
+            WorkflowRow(settings, plan, onChange)
+            AlignRow(settings, onChange)
+        }
 
-        SectionTitle("Varispeed")
-        SpeedControls(settings, plan, onChange)
+        Section("Varispeed", summary = plan?.let { "%+.3f st".format(it.semitones) }) {
+            SpeedControls(settings, plan, onChange)
+        }
 
-        SectionTitle("Tape")
-        TapeControls(settings, onChange)
+        Section("Tape", summary = if (settings.tape) "on" else "off") {
+            TapeControls(settings, onChange)
+        }
 
-        SectionTitle("Output")
-        DepthRow(settings, onChange)
-        Toggle("Normalize", settings.normalize) { on -> onChange { it.copy(normalize = on) } }
-        Toggle("Snap to a sample-exact tempo", settings.snap) { on -> onChange { it.copy(snap = on) } }
-        Toggle("Accept a short loop", settings.allowShort) { on -> onChange { it.copy(allowShort = on) } }
+        Section(
+            "Output",
+            initiallyOpen = false,
+            summary = settings.depth + if (settings.normalize) " · normalized" else "",
+        ) {
+            DepthRow(settings, onChange)
+            Toggle("Normalize", settings.normalize) { on -> onChange { it.copy(normalize = on) } }
+            Toggle("Snap to a sample-exact tempo", settings.snap) { on -> onChange { it.copy(snap = on) } }
+            Toggle("Accept a short loop", settings.allowShort) { on -> onChange { it.copy(allowShort = on) } }
+        }
 
         Spacer(Modifier.height(8.dp))
         Button(
@@ -161,7 +171,13 @@ fun CutterScreen(
 }
 
 @Composable
-private fun Header(loaded: Loaded?, onOpen: () -> Unit) {
+private fun Header(
+    loaded: Loaded?,
+    busy: Busy,
+    playing: Boolean,
+    onOpen: () -> Unit,
+    onPlay: () -> Unit,
+) {
     // Collapsed by default, and keyed on the file so a new one never opens
     // showing the last file's figures.
     var open by remember(loaded) { mutableStateOf(false) }
@@ -207,12 +223,29 @@ private fun Header(loaded: Loaded?, onOpen: () -> Unit) {
                     }
                 }
             }
-            OutlinedButton(onClick = onOpen) { Text("Open") }
+            // The corner belongs to whatever gets pressed most, and that is not
+            // Open: a file is chosen once and then listened to for minutes.
+            // Play is also the control you reach for *while* looking at the
+            // waveform, so it sits beside it rather than under it.
+            if (loaded == null) {
+                OutlinedButton(onClick = onOpen) { Text("Open") }
+            } else {
+                OutlinedButton(onClick = onPlay, enabled = busy is Busy.Idle) {
+                    Text(if (playing) "Stop" else "Play")
+                }
+            }
         }
 
         if (loaded != null && open) {
             Spacer(Modifier.height(8.dp))
             Facts(loaded.analysis)
+            Spacer(Modifier.height(8.dp))
+            // Open lives in here now. Changing the file is a rare, destructive-
+            // feeling act — it throws away every setting on the screen — and it
+            // was sitting under the thumb next to nothing else.
+            OutlinedButton(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
+                Text("Open another file")
+            }
         }
     }
 }
@@ -247,6 +280,55 @@ private fun SectionTitle(text: String) {
     )
 }
 
+/**
+ * A titled group that folds away.
+ *
+ * The screen is a single column and the varispeed sits five groups down it, so
+ * reaching a slider while the loop is playing meant scrolling the waveform off
+ * the top — the one thing you wanted to watch while you moved it. Folding the
+ * groups you are not using brings the ones you are within a thumb's reach of the
+ * picture.
+ *
+ * [rememberSaveable] rather than [remember]: a rotation or a trip through the
+ * file picker must not silently reopen everything the user folded away.
+ * [summary] shows on the collapsed header, so folding hides detail, never state.
+ */
+@Composable
+private fun Section(
+    title: String,
+    initiallyOpen: Boolean = true,
+    summary: String? = null,
+    content: @Composable () -> Unit,
+) {
+    var open by rememberSaveable(title) { mutableStateOf(initiallyOpen) }
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable { open = !open }
+            .padding(top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            title.uppercase(),
+            color = Palette.dim,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(if (open) "  ▴" else "  ▾", color = Palette.dim, fontSize = 11.sp)
+        if (!open && summary != null) {
+            Text(
+                "   $summary",
+                color = Palette.dim,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+    }
+
+    if (open) content()
+}
+
 @Composable
 private fun Facts(a: Analysis) {
     Panel {
@@ -263,8 +345,59 @@ private fun Facts(a: Analysis) {
 
 @Composable
 private fun PlanCard(p: Plan, s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
+    var open by rememberSaveable { mutableStateOf(true) }
+
+    // **Folding must never hide a problem.** Everything in this card is detail
+    // except the two things that say the cut is not what was asked for; those
+    // stay on the collapsed line. A card that could swallow "clips" would be
+    // worse than a card that does not fold.
+    val trouble = when {
+        p.clips -> "clips"
+        p.shortBy > 0 -> "short by ${p.shortBy}"
+        else -> null
+    }
+
+    if (!open) {
+        Panel {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { open = true }
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "${p.bars} bars · ${trim(p.resultingTempo)} BPM · ${p.outputFrames} frames  ▾",
+                    color = Palette.text,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+                if (trouble != null) {
+                    Text(
+                        "   $trouble",
+                        color = if (p.clips) Palette.bad else Palette.warn,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+        }
+        return
+    }
+
     Panel {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(
+                Modifier.fillMaxWidth().clickable { open = false },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "PLAN  ▴",
+                    color = Palette.dim,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
             Fact("cut", "${p.bars} bars from ${p.regionStart} (${p.barsSource})")
             Fact(
                 "path",

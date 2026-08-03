@@ -105,6 +105,74 @@ class CutterScreenTest {
     }
 
     @Test
+    fun play_holds_the_corner_and_open_waits_behind_the_name() {
+        // The corner belongs to whatever is pressed most. A file is chosen once
+        // and then listened to for minutes, so Play took it — and Open, which
+        // throws away every setting on the screen, moved somewhere deliberate.
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                CutterScreen(
+                    loaded = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks),
+                    settings = Settings(),
+                    plan = null,
+                    busy = Busy.Idle,
+                    problem = null,
+                    onOpen = {},
+                    onExport = {},
+                    onChange = {},
+                    onDismissProblem = {},
+                )
+            }
+        }
+
+        compose.onNodeWithText("Play").assertExists()
+        compose.onNodeWithText("Open another file").assertDoesNotExist()
+
+        compose.onNodeWithText(name).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Open another file").assertExists()
+    }
+
+    @Test
+    fun a_folded_plan_card_still_says_that_the_cut_clips() {
+        // The rule that makes folding safe at all: detail may hide, trouble may
+        // not. A card that could swallow "clips" would be worse than one that
+        // does not fold, because the number it hid was the reason to look.
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+        val plan = Engine.plan(org.loopslcr.Native.direct(raw), "200 loop.wav", Settings())
+            .copy(clips = true, peak = 1.4998)
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                CutterScreen(
+                    loaded = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks),
+                    settings = Settings(),
+                    plan = plan,
+                    busy = Busy.Idle,
+                    problem = null,
+                    onOpen = {},
+                    onExport = {},
+                    onChange = {},
+                    onDismissProblem = {},
+                )
+            }
+        }
+
+        // Fold it by its own header, the way a user would.
+        compose.onNodeWithText("PLAN  ▴").performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("cut").assertDoesNotExist()
+        compose.onNodeWithText("clips", substring = true).assertExists()
+    }
+
+    @Test
     fun the_calculator_renders_its_table() {
         val settings = CalculatorSettings(bpm = "103", sampleRate = 44_100, bars = 8)
         val sums = Calculator.compute(settings).getOrThrow()

@@ -351,6 +351,8 @@ worth exactly as much as its regression check.
   - [x] Path A/B selector naming the action, with the detection's evidence shown
   - [x] Pitch control answers under the finger, not on release
   - [x] File figures behind the name instead of ahead of the controls
+  - [x] Play in the corner, Open behind the name, sections that fold
+        (a folded plan card still shows `clips` / `short by`)
   - [ ] Zoom (needs peaks re-measured for a window, not scaled buckets)
   - [ ] BPM detector — only the 14 archive files carrying no tempo need it
   - [x] Draggable markers — they snap to bar lines, which is the only way a
