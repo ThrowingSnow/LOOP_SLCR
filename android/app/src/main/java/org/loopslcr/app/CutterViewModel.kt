@@ -302,9 +302,25 @@ class CutterViewModel : ViewModel() {
     }
 
     fun update(change: (Settings) -> Settings) {
+        val before = _settings.value
         _settings.update(change)
+        val after = _settings.value
+
+        // Speed is the one setting a running preview can follow without being
+        // rebuilt, so it must not wait for the plan. It used to: the ratio came
+        // only from the planning call, behind a 250 ms debounce, so the slider
+        // answered on release rather than under the finger. The exact value
+        // still arrives with the plan and overwrites this one — see [Speed].
+        if (_playing.value && before.sameLoopAs(after)) {
+            Speed.ratio(after, sourceTempo())?.let { player.setRatio(it) }
+        }
+
         schedulePlan(immediately = false)
     }
+
+    /** The tempo the loaded file is running at, as best as it is known. */
+    private fun sourceTempo(): Double? =
+        _plan.value?.tempo ?: _loaded.value?.analysis?.tempo
 
     /**
      * Recomputes the plan, after a pause if a slider is still moving.

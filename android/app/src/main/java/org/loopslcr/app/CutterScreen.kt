@@ -1,6 +1,7 @@
 package org.loopslcr.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -113,7 +114,10 @@ fun CutterScreen(
             )
         }
 
-        Facts(loaded.analysis)
+        // The file's own figures now live behind the name in [Header]; what
+        // stays on screen is what a *decision* is made from. They were three
+        // panels deep before the first control, and a screen you have to scroll
+        // past to reach the thing you came for is a screen that buried it.
         if (plan != null) PlanCard(plan, settings, onChange)
 
         SectionTitle("Source")
@@ -122,7 +126,7 @@ fun CutterScreen(
         SectionTitle("Loop")
         BarsRow(settings, onChange)
         SkipRow(settings, onChange)
-        WorkflowRow(settings, onChange)
+        WorkflowRow(settings, plan, onChange)
         AlignRow(settings, onChange)
 
         SectionTitle("Varispeed")
@@ -158,21 +162,58 @@ fun CutterScreen(
 
 @Composable
 private fun Header(loaded: Loaded?, onOpen: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text("LOOP_SLCR", color = Palette.text, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            Text(
-                loaded?.name ?: "no file",
-                color = Palette.dim,
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
-            )
+    // Collapsed by default, and keyed on the file so a new one never opens
+    // showing the last file's figures.
+    var open by remember(loaded) { mutableStateOf(false) }
+
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    // The whole name is the target, not a separate icon: on a
+                    // phone the name is already the biggest thing to hit.
+                    .then(
+                        if (loaded == null) {
+                            Modifier
+                        } else {
+                            Modifier.clickable { open = !open }
+                        },
+                    ),
+            ) {
+                Text(
+                    "LOOP_SLCR",
+                    color = Palette.text,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        loaded?.name ?: "no file",
+                        color = Palette.dim,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    if (loaded != null) {
+                        Text(
+                            if (open) "  ▴" else "  ▾",
+                            color = Palette.dim,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+            }
+            OutlinedButton(onClick = onOpen) { Text("Open") }
         }
-        OutlinedButton(onClick = onOpen) { Text("Open") }
+
+        if (loaded != null && open) {
+            Spacer(Modifier.height(8.dp))
+            Facts(loaded.analysis)
+        }
     }
 }
 
@@ -225,7 +266,12 @@ private fun PlanCard(p: Plan, s: Settings, onChange: ((Settings) -> Settings) ->
     Panel {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Fact("cut", "${p.bars} bars from ${p.regionStart} (${p.barsSource})")
-            Fact("workflow", "${p.workflowChosen} (detected ${p.workflowDetected})")
+            Fact(
+                "path",
+                Paths.label(p.workflowChosen) +
+                    " · detected " + Paths.label(p.workflowDetected) +
+                    (p.audibleLoops?.let { " · %.2f loops audible".format(it) } ?: ""),
+            )
             Fact(
                 "speed",
                 if (p.ratio == 1.0) {
@@ -391,12 +437,37 @@ private fun AlignRow(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
     )
 }
 
+/**
+ * Which of the two paths to take, and why.
+ *
+ * The chips alone were the whole control before, labelled in the engine's words
+ * and with the detection's answer buried in the plan card. Three chips is still
+ * the right control — what was missing is that a choice made for you has to be
+ * visible, explicable and refusable. See [Paths].
+ */
 @Composable
-private fun WorkflowRow(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
+private fun WorkflowRow(s: Settings, plan: Plan?, onChange: ((Settings) -> Settings) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (w in listOf("auto", "warmup", "foldback")) {
-            Chip(w, s.workflow == w) { onChange { it.copy(workflow = w) } }
+        for (w in Paths.offered) {
+            Chip(Paths.label(w), s.workflow == w) { onChange { it.copy(workflow = w) } }
         }
+    }
+
+    if (plan != null) {
+        val note = Paths.note(s.workflow, plan)
+        Text(
+            note.text,
+            color = if (note.warn) Palette.warn else Palette.dim,
+            fontSize = 11.sp,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        // What the path actually does, described for the one that will run —
+        // which under `auto` is the detected one, not the word "auto".
+        Text(
+            Paths.explain(plan.workflowChosen),
+            color = Palette.dim,
+            fontSize = 11.sp,
+        )
     }
 }
 

@@ -1149,3 +1149,53 @@ Zwei Ebenen, getrennt gehalten:
   selbst holt (foojay-Resolver in `settings.gradle.kts`). Das *gehört* ins
   Repository: ein Build, der nur mit den Systempaketen einer bestimmten Woche
   funktioniert, ist kein Build.
+
+## 23. Der Tail-Modus, sichtbar gemacht
+
+Der Kern hat immer richtig zwischen den beiden Pfaden gewählt und immer
+gemeldet, was er gewählt hat. Was er nicht konnte: die Wahl *lesbar* machen. Auf
+dem Bildschirm stand `workflow: unclear (detected unclear)` — eine Feststellung,
+gegen die man nicht argumentieren kann.
+
+- **Die Knöpfe heißen jetzt nach der Handlung, nicht nach der Datei.** `warmup`
+  und `foldback` beschreiben, wie die Datei gerendert wurde; `cut (A)` und
+  `fold (B)` beschreiben, was das Werkzeug tun wird — und wer einen Knopf
+  drückt, wählt eine Handlung.
+- **Die Begründung steht daneben.** `audibleBars` geteilt durch die Loop-Länge
+  ist genau das Verhältnis, gegen das `WorkflowGuess::detect` seine Schwellen
+  schreibt: etwa zwei für einen Warmup-Render, etwa eins für eine Datei, die
+  einen Foldback braucht. Diese Zahl wird jetzt mitgeliefert und angezeigt, denn
+  ohne sie ist die Erkennung ein Befehl statt eines Arguments.
+- **Ein Rückfall wird ausgesprochen.** Bei `unclear` nimmt der Kern absichtlich
+  den geraden Schnitt — ein falscher Schnitt ist hörbar und wiederholbar, ein
+  falscher Foldback verdoppelt still die Tails. Das ist eine Entscheidung
+  stellvertretend für den Benutzer, also darf sie nicht stumm sein.
+- **Ein Widerspruch auch.** Wer von Hand gegen die Erkennung wählt, darf das —
+  vielleicht weiß er etwas, das die Datei nicht sagt. Die wahrscheinlichere
+  Ursache ist aber ein Chip, der von der vorigen Datei stehen geblieben ist.
+
+Die Regel dahinter, in `Paths.kt` festgehalten: *die App darf für den Benutzer
+entscheiden, aber nicht so, dass er es nicht sieht, nicht versteht und nicht
+überstimmen kann.*
+
+## 24. Drei Dinge aus einem zweiten Screenshot
+
+- **Der Pitch-Regler antwortete erst beim Loslassen.** Das Verhältnis kam
+  ausschließlich aus dem Plan, also hinter 250 ms Debounce plus nativem Aufruf.
+  Dabei ist es lokal trivial: `2^(st/12)`, oder Zieltempo durch Quelltempo. Das
+  geht jetzt sofort an den Handle, der Plan überschreibt es später mit dem
+  exakten rationalen Wert, und die 120-ms-Glide macht die Korrektur unhörbar —
+  gemessen liegt sie unter 1e-9 relativ, ein Cent sind 0,0578 %.
+  **Diese Zahl darf nie in eine Datei.** Sie existiert zwischen einem bewegten
+  Finger und der antwortenden Pipeline, sonst nirgends.
+- **Das Raster braucht keinen BPM-Detektor.** `samplesPerBar` liegt im Plan
+  bereits vor, also stehen die Taktlinien exakt dort, wo ein Marker einrasten
+  würde — dieselbe Arithmetik, nicht eine zweite. Jede vierte Linie ist heller,
+  weil vier Takte die Phrase sind, auf der praktisch das ganze Archiv steht.
+  Unter vier Pixeln Abstand wird gar nichts gezeichnet: ein Raster, das zum
+  Schleier wird, liest sich als Teil des Signals, und eine leise Stelle sähe
+  voller aus, als sie ist. Nichts schlägt einen Farbton, der falsch informiert.
+- **Die Dateizahlen lagen im Weg.** Sie standen zwischen Waveform und jedem
+  Bedienelement, also war das Erste, was man ändern konnte, einen Scroll weit
+  weg. Jetzt liegen sie hinter dem Dateinamen, einen Tipp entfernt. Auf dem
+  Bildschirm bleibt, woraus eine *Entscheidung* gefällt wird.

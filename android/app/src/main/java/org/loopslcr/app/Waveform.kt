@@ -170,6 +170,12 @@ fun Waveform(
             right = null
         }
 
+        // The bar grid, under the waveform so it reads as ruling on paper rather
+        // than as marks over the audio. No tempo detection involved: the bar
+        // length is the one the plan already computed, so a line here stands
+        // exactly where a marker would snap to.
+        gridLines(frames, samplesPerBar)
+
         val laneHeight = size.height / channels
         for (channel in 0 until channels) {
             val top = laneHeight * channel
@@ -222,6 +228,41 @@ fun Waveform(
 }
 
 /**
+ * The bar lines, every fourth one brighter.
+ *
+ * Two judgements in here, both about not lying:
+ *
+ * **Nothing is drawn when the lines would be closer than four pixels.** Below
+ * that a grid stops being a grid and becomes a wash the eye reads as part of the
+ * signal — a quiet passage would look busier than it is. Nothing beats a tint
+ * that misinforms.
+ *
+ * **Every fourth line is brighter**, because four bars is the phrase almost
+ * everything in the archive is built on, and counting single bars across a
+ * screen is exactly the work the grid is supposed to remove.
+ */
+private fun DrawScope.gridLines(frames: Long, samplesPerBar: Double?) {
+    if (samplesPerBar == null || samplesPerBar <= 0.0 || frames <= 0L) return
+
+    val step = size.width * (samplesPerBar / frames).toFloat()
+    if (!step.isFinite() || step < 4f) return
+
+    val bars = (frames / samplesPerBar).toInt()
+    if (bars < 1) return
+
+    for (bar in 1..bars) {
+        val x = step * bar
+        if (x >= size.width) break
+        val phrase = bar % 4 == 0
+        drawRect(
+            color = if (phrase) Palette.gridStrong else Palette.grid,
+            topLeft = Offset(x, 0f),
+            size = Size(1f, size.height),
+        )
+    }
+}
+
+/**
  * One end of the cut, with a handle.
  *
  * A two-pixel line is a thing to look at, not a thing to grab. The handle is the
@@ -251,6 +292,10 @@ object Palette {
     val wave = Color(0xFFFF6B4A)
     val outside = Color(0x99000000)
     val axis = Color(0xFF2A2A33)
+    /** Bar lines. Under the waveform, so barely there is right. */
+    val grid = Color(0xFF23232C)
+    /** Every fourth bar — the phrase line. */
+    val gridStrong = Color(0xFF3A3A47)
     val marker = Color(0xFFF2F2F2)
     /** A marker under a finger. Deliberately not the play head's colour. */
     val grabbed = Color(0xFF7DD3FC)

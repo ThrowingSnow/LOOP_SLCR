@@ -160,6 +160,13 @@ pub fn plan(bytes: &[u8], name: &str, params: &str) -> Result<String, String> {
         .string("barsSource", bars_source_name(outcome.bars_source))
         .string("workflowDetected", workflow_name(outcome.detected))
         .string("workflowChosen", workflow_name(outcome.chosen))
+        // The evidence the detection ran on, so a UI can show *why* rather than
+        // only *what*. `audibleBars` is the one that decides it: divided by the
+        // loop length it gives the ratio the thresholds in
+        // `WorkflowGuess::detect` are written against — about two for a warmup
+        // render, about one for a file needing a foldback.
+        .number("audibleBars", outcome.shape.audible_bars)
+        .number("barsInFile", outcome.shape.bars_in_file)
         .integer("skipBars", outcome.skip_bars as i64)
         .integer("regionStart", outcome.region.start as i64)
         .integer("regionEnd", outcome.region.end as i64)
@@ -612,6 +619,32 @@ mod tests {
         assert_eq!(field(&json, "shortBy").as_u64(), Some(0));
         assert_eq!(field(&json, "barsSource").as_str(), Some("fileLength"));
         assert_eq!(field(&json, "outputFrames").as_u64(), Some(8 * 4 * 60 * 8_000 / 100));
+    }
+
+    #[test]
+    fn the_plan_carries_the_evidence_the_detection_ran_on() {
+        // A UI that only shows *what* was detected states a conclusion the user
+        // cannot argue with. `audibleBars` divided by the loop length is the
+        // ratio `WorkflowGuess::detect` thresholds on, so publishing it is what
+        // lets the choice be judged rather than only obeyed.
+        let json = plan(&file(8), "200 loop.wav", "{}").unwrap();
+        let bars = field(&json, "bars").as_u64().unwrap() as f64;
+        let audible = field(&json, "audibleBars").as_f64().unwrap();
+        let in_file = field(&json, "barsInFile").as_f64().unwrap();
+
+        assert!(audible > 0.0, "no audible material reported");
+        assert!(
+            audible <= in_file + 1e-9,
+            "audible {audible} exceeds the file's {in_file} bars"
+        );
+
+        // The synthetic file is one 8-bar loop with no tail at all, so it reads
+        // as exactly one loop of audible material. That is `trimmed`, not
+        // `foldback`: a file this tool has already produced, where folding an
+        // empty tail back would be harmless but saying so would be a lie.
+        let loops = audible / bars;
+        assert!((loops - 1.0).abs() < 0.01, "{loops} loops of audible material");
+        assert_eq!(field(&json, "workflowDetected").as_str(), Some("trimmed"));
     }
 
     #[test]

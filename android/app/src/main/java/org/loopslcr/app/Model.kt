@@ -51,6 +51,10 @@ data class Plan(
     val barsSource: String,
     val workflowDetected: String,
     val workflowChosen: String,
+    /** Bars of audible material, tail excluded — the evidence behind the detection. */
+    val audibleBars: Double,
+    /** Bars the file spans, tail included. */
+    val barsInFile: Double,
     val skipBars: Long,
     val regionStart: Long,
     val regionEnd: Long,
@@ -81,6 +85,18 @@ data class Plan(
     val samplesPerBar: Double?
         get() = if (bars > 0) (regionEnd - regionStart).toDouble() / bars else null
 
+    /**
+     * Audible material measured in loop lengths.
+     *
+     * The number the detection actually thresholds on: about two means the file
+     * holds the loop twice and the second pass is the settled one, about one
+     * means it holds it once and the tail has to be folded back. Showing it is
+     * what turns "detected foldback" from an assertion into something the user
+     * can agree or disagree with.
+     */
+    val audibleLoops: Double?
+        get() = if (bars > 0 && audibleBars > 0.0) audibleBars / bars else null
+
     companion object {
         fun from(o: JSONObject) = Plan(
             tempo = o.getDouble("tempo"),
@@ -89,6 +105,8 @@ data class Plan(
             barsSource = o.getString("barsSource"),
             workflowDetected = o.getString("workflowDetected"),
             workflowChosen = o.getString("workflowChosen"),
+            audibleBars = o.optDouble("audibleBars", 0.0),
+            barsInFile = o.optDouble("barsInFile", 0.0),
             skipBars = o.getLong("skipBars"),
             regionStart = o.getLong("regionStart"),
             regionEnd = o.getLong("regionEnd"),

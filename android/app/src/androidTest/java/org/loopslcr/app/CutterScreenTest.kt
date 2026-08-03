@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onRoot
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertTrue
@@ -63,6 +64,44 @@ class CutterScreenTest {
         val shot = compose.onRoot().captureToImage()
         assertTrue(shot.width > 0 && shot.height > 0)
         save(shot.asAndroidBitmap(), "cutter.png")
+    }
+
+    @Test
+    fun the_file_figures_hide_behind_the_name_until_it_is_tapped() {
+        // They used to sit between the waveform and every control, so the first
+        // thing you could actually change was a scroll away. Behind the name
+        // they are one tap off — but the tap has to work, and the figures must
+        // not be on screen before it.
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                CutterScreen(
+                    loaded = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks),
+                    settings = Settings(),
+                    plan = null,
+                    busy = Busy.Idle,
+                    problem = null,
+                    onOpen = {},
+                    onExport = {},
+                    onChange = {},
+                    onDismissProblem = {},
+                )
+            }
+        }
+
+        compose.onNodeWithText("format").assertDoesNotExist()
+        compose.onNodeWithText(name).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("format").assertExists()
+        compose.onNodeWithText("peak").assertExists()
+
+        // And it closes again, or it is a one-way door rather than a drawer.
+        compose.onNodeWithText(name).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("format").assertDoesNotExist()
     }
 
     @Test

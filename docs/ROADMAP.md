@@ -347,6 +347,12 @@ worth exactly as much as its regression check.
 - [ ] **Tab: CUTTER**
   - [x] Waveform view from Rust peak buckets
   - [x] Cut region shown as an overlay with markers
+  - [x] Bar grid under the waveform, from the plan's own bar length
+  - [x] Path A/B selector naming the action, with the detection's evidence shown
+  - [x] Pitch control answers under the finger, not on release
+  - [x] File figures behind the name instead of ahead of the controls
+  - [ ] Zoom (needs peaks re-measured for a window, not scaled buckets)
+  - [ ] BPM detector — only the 14 archive files carrying no tempo need it
   - [x] Draggable markers — they snap to bar lines, which is the only way a
         finger is allowed near a cut point; with handles, and a line that
         follows the finger rather than the pipeline

@@ -113,6 +113,67 @@ class WaveformDragTest {
         assertTrue("after the cut: $after vs inside $inside", after < inside * 0.8)
     }
 
+    @Test
+    fun the_bar_grid_stands_where_the_bars_are() {
+        // A grid that is off by a bar is worse than no grid: it is a picture of
+        // a tempo the file does not have, and every judgement made by eye from
+        // then on is wrong. So the lines are checked against the arithmetic that
+        // put them there rather than against a screenshot.
+        //
+        // A silent file, so nothing but the grid is drawn and a bar line is the
+        // only thing that can be brighter than the background.
+        val bars = 8
+        val perBarHere = frames.toDouble() / bars
+        compose.setContent {
+            Waveform(
+                peaks = FloatArray(64 * 2 * 2),
+                channels = 2,
+                frames = frames,
+                region = null,
+                samplesPerBar = perBarHere,
+                modifier = Modifier.testTag("wave").size(320.dp, 120.dp),
+            )
+        }
+
+        val shot = compose.onNodeWithTag("wave").captureToImage().asAndroidBitmap()
+        val step = shot.width.toDouble() / bars
+
+        // On a line, and a third of a bar away from one. The first must be
+        // brighter; nothing else in the picture is.
+        for (bar in 1 until bars) {
+            val on = brightness(shot, (step * bar).toInt().coerceIn(0, shot.width - 1))
+            val off = brightness(shot, (step * (bar + 0.33)).toInt().coerceIn(0, shot.width - 1))
+            assertTrue("bar $bar: line $on vs gap $off", on > off)
+        }
+    }
+
+    @Test
+    fun a_grid_too_fine_to_read_is_not_drawn_at_all() {
+        // Below about four pixels apart the lines stop being a grid and become a
+        // wash, and a wash reads as part of the signal — a quiet passage would
+        // look busier than it is. Nothing beats a tint that misinforms.
+        compose.setContent {
+            Waveform(
+                peaks = FloatArray(64 * 2 * 2),
+                channels = 2,
+                frames = frames,
+                region = null,
+                // Two thousand bars across 320 dp: far under a pixel each.
+                samplesPerBar = frames.toDouble() / 2000.0,
+                modifier = Modifier.testTag("wave").size(320.dp, 120.dp),
+            )
+        }
+
+        val shot = compose.onNodeWithTag("wave").captureToImage().asAndroidBitmap()
+        val columns = (1 until shot.width).map { brightness(shot, it) }
+        val darkest = columns.min()
+        val brightest = columns.max()
+        assertTrue(
+            "the picture is not uniform: $darkest to $brightest",
+            brightest - darkest < 1.0,
+        )
+    }
+
     /** Mean luminance of one column, as a stand-in for "how bright is this bit". */
     private fun brightness(bitmap: android.graphics.Bitmap, x: Int): Double {
         var total = 0.0
