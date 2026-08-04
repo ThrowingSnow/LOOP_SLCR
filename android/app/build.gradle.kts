@@ -76,10 +76,23 @@ android {
         // the same byte count as the build before it, which is easy to miss and
         // was missed. When "is this the new one?" is a question, guessing at it
         // wastes far more time than printing the answer.
+        //
+        // It only half worked: it caught a stale APK the second time, but it
+        // also read `aebd2e8` off a build that predated the commit, because a
+        // commit hash alone cannot say whether the sources went in with it. So
+        // it carries a "+dirty" when the app's own sources differ from what the
+        // named commit holds — the exact state in which the stamp lies.
         versionName = "0.1.0+" + (
             providers.exec {
                 commandLine("git", "rev-parse", "--short", "HEAD")
             }.standardOutput.asText.get().trim().ifEmpty { "unknown" }
+            ) + (
+            providers.exec {
+                commandLine(
+                    "git", "status", "--porcelain", "--",
+                    projectDir.resolve("src").absolutePath,
+                )
+            }.standardOutput.asText.get().trim().let { if (it.isEmpty()) "" else "+dirty" }
             )
         ndk { abiFilters += abis }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

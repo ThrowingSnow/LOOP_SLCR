@@ -1253,6 +1253,25 @@ Daraus zwei bleibende Änderungen:
 - **Die Regel für mich: einer Erfolgsmeldung nicht glauben, wenn das Ergebnis
   prüfbar ist.** Bei einem APK ist es prüfbar.
 
+### 26a. Derselbe Fehler noch einmal — und was der Stempel nicht kann
+
+Zwei Runden später wieder „hat sich wie nichts verändert", und wieder zu Recht:
+das APK trug `0.1.0+38bb3c4`, während HEAD auf `aebd2e8` stand. Berichtet worden
+war `0.1.0+aebd2e8`. Der Stempel hat den Fehler diesmal *gefunden* — geglaubt
+worden war trotzdem der Bericht statt dem Artefakt.
+
+Zwei Dinge daraus:
+
+- **Die Byte-Zahl taugt nicht als Zeuge.** Die beiden Builds waren auf das Byte
+  gleich groß (2 417 311) — bei zwei *verschiedenen* Commits. Was zählt, ist eine
+  Zeichenkette, die es vorher nicht gab.
+- **Ein Commit-Hash allein sagt nichts über die Quellen.** Wird gebaut, bevor
+  committet wird, nennt der Stempel den Vor-Commit und sieht dabei sauber aus.
+  Deshalb trägt `versionName` jetzt ein **`+dirty`**, sobald `app/src` von dem
+  abweicht, was der genannte Commit enthält — genau der Zustand, in dem der
+  Stempel lügt. Und die Reihenfolge ist: **erst committen, dann bauen, dann
+  ausliefern.**
+
 ## 27. Der Pitch-Regler wandert unter die Waveform
 
 Er ist das einzige Bedienelement, das man *während des Hörens* festhält, und lag
