@@ -4,6 +4,9 @@ import android.graphics.Bitmap
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getBoundsInRoot
@@ -59,8 +62,14 @@ class CutterScreenTest {
 
         compose.onNodeWithText(name).assertExists()
         compose.onNodeWithText("Export").assertExists()
-        // The tape sliders only exist when the character is on — a panel that
-        // renders whether or not it applies is a panel that lies.
+
+        // Groups start folded, so the tape panel is not composed until its
+        // header is tapped — and then it is there. The tape sliders exist only
+        // when the character is on: a panel that renders whether or not it
+        // applies is a panel that lies.
+        compose.onNodeWithText("Tape character").assertDoesNotExist()
+        compose.onNodeWithText("TAPE").performClick()
+        compose.waitForIdle()
         compose.onNodeWithText("Tape character").assertExists()
 
         val shot = compose.onRoot().captureToImage()
@@ -166,12 +175,14 @@ class CutterScreenTest {
             }
         }
 
-        // Fold it by its own header, the way a user would.
-        compose.onNodeWithText("PLAN  ▴").performClick()
-        compose.waitForIdle()
-
+        // Everything starts folded now, so this is the state the user meets.
         compose.onNodeWithText("cut").assertDoesNotExist()
         compose.onNodeWithText("clips", substring = true).assertExists()
+
+        // And unfolding still gives the detail back.
+        compose.onNodeWithText("clips", substring = true).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("cut").assertExists()
     }
 
     @Test
@@ -205,14 +216,56 @@ class CutterScreenTest {
         // line that sits directly under the waveform. Comparing raw bounds
         // against the VARISPEED header does not work: a node scrolled out of
         // view reports zero, which would pass for the wrong reason.
-        compose.onNodeWithText("pitch").assertIsDisplayed()
+        compose.onNodeWithText("speed").assertIsDisplayed()
         compose.onNodeWithText("drag a marker", substring = true).assertIsDisplayed()
 
-        val pitch = compose.onNodeWithText("pitch").getBoundsInRoot()
+        val pitch = compose.onNodeWithText("speed").getBoundsInRoot()
         val hint = compose.onNodeWithText("drag a marker", substring = true).getBoundsInRoot()
         assertTrue("pitch at ${pitch.top}, hint at ${hint.top}", pitch.top > hint.top)
 
         compose.onNodeWithText("-3.00 st", substring = true).assertExists()
+    }
+
+    @Test
+    fun a_tempo_arriving_from_elsewhere_reaches_the_field() {
+        // The bug behind "send the BPM from the calculator and it just adapts".
+        // The field kept its text in a `remember` keyed on the *mode*, so a
+        // tempo that arrived while target-BPM mode was already selected left the
+        // old number sitting there — which looks exactly like nothing happened.
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+        val plan = Engine.plan(org.loopslcr.Native.direct(raw), "200 loop.wav", Settings())
+
+        // Already in target-BPM mode, as it would be on a second send.
+        var settings by mutableStateOf(
+            Settings(speedMode = SpeedMode.TargetBpm, targetBpm = 150.0),
+        )
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                CutterScreen(
+                    loaded = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks),
+                    settings = settings,
+                    plan = plan,
+                    busy = Busy.Idle,
+                    problem = null,
+                    onOpen = {},
+                    onExport = {},
+                    onChange = { change -> settings = change(settings) },
+                    onDismissProblem = {},
+                )
+            }
+        }
+
+        compose.onNodeWithText("150").assertExists()
+
+        // What `sendTempoToCutter` does, from outside the screen.
+        settings = settings.copy(speedMode = SpeedMode.TargetBpm, targetBpm = 90.0)
+        compose.waitForIdle()
+
+        compose.onNodeWithText("90").assertExists()
+        compose.onNodeWithText("150").assertDoesNotExist()
     }
 
     @Test

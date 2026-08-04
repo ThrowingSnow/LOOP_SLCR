@@ -1269,3 +1269,38 @@ verschwindet, wäre schlimmer als einer, der an seinem Platz bleibt.
 Der Test dazu prüft **Sichtbarkeit ohne Scrollen**, nicht rohe Koordinaten: ein
 aus dem Sichtfeld gescrollter Knoten meldet Null, und ein Vergleich gegen Null
 wäre aus dem falschen Grund durchgegangen — was er beim ersten Versuch auch tat.
+
+## 28. Alles zugeklappt, und ein Regler für das Zieltempo
+
+- **Zugeklappt ist jetzt die Regel**, nicht die Ausnahme. `Section` hat
+  `initiallyOpen = false` als Vorgabe, die Plan-Karte startet gefaltet. Der
+  Bildschirm öffnet auf dem, was man ansieht — Waveform und Varispeed — und
+  alles andere ist einen Tipp entfernt statt einen Scroll.
+- **Die ganze Varispeed steht unter der Waveform.** Modus-Chips, Regler und das
+  BPM-Feld. Der eigene Abschnitt ist damit überflüssig geworden und wurde
+  entfernt, samt `SpeedControls` — zwei Orte für eine Sache sind ein Ort zu
+  viel.
+- **Das Zieltempo hat einen Regler**, mit dem Bereich `Quelle/2 .. Quelle×2`.
+  Nicht aus absoluten Zahlen gegriffen, sondern aus der Quelle abgeleitet: das
+  ist genau die musikalische Spanne des Halbton-Reglers (±12 Halbtöne sind
+  Faktor 0,5 bis 2), also decken beide Bedienelemente dasselbe Feld ab, und der
+  Regler kann kein Verhältnis erreichen, das die Vorschau anschließend
+  beschneiden müsste. Rastung beim Quelltempo, aus demselben Grund, aus dem der
+  Halbton-Regler eine bei null hat. Das Textfeld bleibt daneben: ein Regler
+  trifft keine glatte 90, und eine glatte 90 ist meistens der Punkt.
+
+**Der Fehler, der beim Umbau auffiel.** „Wenn man im Calculator die BPM schickt,
+soll er sich einfach anpassen" — tat er nicht. Das Textfeld hielt seinen Text in
+einem `remember`, das auf den *Modus* verschlüsselt war. Ein Tempo, das ankam,
+während „target BPM" schon gewählt war, ließ die alte Zahl stehen — und das
+sieht genau so aus, als wäre nichts passiert. Jetzt übernimmt ein
+`LaunchedEffect(s.targetBpm)` jeden Wert, der von außen kommt, ohne beim Tippen
+dazwischenzufunken. Gegen die alte Fassung laufen gelassen: `AssertionError:
+Failed: assertExists.`
+
+**Und eine Lektion, die ich schon einmal gelernt hatte.** Der Halbton-Wert im
+Streifen kam zuerst aus dem Plan statt aus der Einstellung — also lag zwischen
+dem Ziehen und der eigenen Anzeige eine Debounce. Dieselbe Regel wie bei den
+Markern: *ein lebendes Bedienelement folgt dem Finger, nicht der Pipeline.* Im
+Zieltempo-Modus ist es umgekehrt richtig, weil die Halbtöne dort abgeleitet sind
+und es gar keine Einstellung gibt, die man anzeigen könnte.

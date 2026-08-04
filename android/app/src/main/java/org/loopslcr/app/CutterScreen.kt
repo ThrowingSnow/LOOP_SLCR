@@ -25,6 +25,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -121,21 +122,19 @@ fun CutterScreen(
         // preview is for.
         Section(
             "Source",
-            initiallyOpen = false,
             summary = plan?.let { "${trim(it.tempo)} BPM · ${settings.sig}" },
         ) {
             SourceControls(loaded.analysis, settings, onChange)
         }
 
-        Section("Loop", summary = plan?.let { "${it.bars} bars from ${it.skipBars}" }) {
+        Section(
+            "Loop",
+            summary = plan?.let { "${it.bars} bars from ${it.skipBars}" },
+        ) {
             BarsRow(settings, onChange)
             SkipRow(settings, onChange)
             WorkflowRow(settings, plan, onChange)
             AlignRow(settings, onChange)
-        }
-
-        Section("Varispeed", summary = plan?.let { "%+.3f st".format(it.semitones) }) {
-            SpeedControls(settings, plan, onChange)
         }
 
         Section("Tape", summary = if (settings.tape) "on" else "off") {
@@ -144,7 +143,6 @@ fun CutterScreen(
 
         Section(
             "Output",
-            initiallyOpen = false,
             summary = settings.depth + if (settings.normalize) " · normalized" else "",
         ) {
             DepthRow(settings, onChange)
@@ -298,7 +296,7 @@ private fun SectionTitle(text: String) {
 @Composable
 private fun Section(
     title: String,
-    initiallyOpen: Boolean = true,
+    initiallyOpen: Boolean = false,
     summary: String? = null,
     content: @Composable () -> Unit,
 ) {
@@ -350,7 +348,7 @@ private fun Facts(a: Analysis) {
 
 @Composable
 private fun PlanCard(p: Plan, s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
-    var open by rememberSaveable { mutableStateOf(true) }
+    var open by rememberSaveable { mutableStateOf(false) }
 
     // **Folding must never hide a problem.** Everything in this card is detail
     // except the two things that say the cut is not what was asked for; those
@@ -633,55 +631,6 @@ private fun DepthRow(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
  */
 @Composable
 private fun PitchStrip(s: Settings, plan: Plan?, onChange: ((Settings) -> Settings) -> Unit) {
-    if (s.speedMode != SpeedMode.Semitones) return
-
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            "pitch",
-            color = Palette.dim,
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace,
-        )
-        Text(
-            "  %+.2f st".format(s.semitones),
-            color = if (s.semitones == 0.0) Palette.dim else Palette.text,
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
-        )
-        if (plan != null && plan.ratio != 1.0) {
-            Text(
-                "   → ${trim(plan.resultingTempo)} BPM",
-                color = if (plan.ratioExact) Palette.dim else Palette.warn,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-            )
-        }
-    }
-    Slider(
-        value = s.semitones.toFloat(),
-        onValueChange = { raw ->
-            // A detent at unity, because "no change" has to be reachable with a
-            // finger. Without it every drag leaves a ratio of 1.003 that costs a
-            // resample and buys nothing.
-            val v = raw.toDouble()
-            val snapped = if (abs(v) < DETENT_SEMITONES) 0.0 else (v * 100).roundToInt() / 100.0
-            onChange { it.copy(semitones = snapped) }
-        },
-        valueRange = -12f..12f,
-        modifier = Modifier.fillMaxWidth(),
-    )
-}
-
-/**
- * The varispeed, and what it means in the three units people think in.
- *
- * Semitones for a musician, per cent for a tape machine, BPM for a sequencer.
- * They are one number under three names, and showing only the one that happens
- * to be the input makes the other two a mental conversion the tool could have
- * done.
- */
-@Composable
-private fun SpeedControls(s: Settings, plan: Plan?, onChange: ((Settings) -> Settings) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Chip("semitones", s.speedMode == SpeedMode.Semitones) {
             onChange { it.copy(speedMode = SpeedMode.Semitones) }
@@ -691,30 +640,87 @@ private fun SpeedControls(s: Settings, plan: Plan?, onChange: ((Settings) -> Set
         }
     }
 
-    if (plan != null) {
-        // From the plan, not from the control: the ratio may be a fraction the
-        // slider only approximates, and 90/103 is the number that matters.
-        val percent = (plan.ratio - 1.0) * 100.0
-        Fact(
-            "speed",
-            "%+.3f st · %+.1f cents".format(plan.semitones, plan.semitones * 100) +
-                " · %+.3f %%".format(percent),
+    // The source tempo, which is what a target tempo is a ratio *of*. Without
+    // it there is no honest slider range, only an invented one.
+    val source = plan?.tempo
+
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("speed", color = Palette.dim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+        // In semitone mode this is the *setting*, not the plan. Same lesson the
+        // markers taught: a live control has to follow the finger, and reading
+        // it back from the pipeline puts a debounce between a drag and its own
+        // readout. In target-BPM mode there is no setting to show — the
+        // semitones are derived — so the plan is the only source.
+        val shown = when (s.speedMode) {
+            SpeedMode.Semitones -> s.semitones
+            SpeedMode.TargetBpm -> plan?.semitones
+        }
+        Text(
+            shown?.let { "  %+.2f st".format(it) } ?: "  —",
+            color = if (shown == null || shown == 0.0) Palette.dim else Palette.text,
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
         )
-        Fact(
-            "tempo",
-            "${trim(plan.tempo)} → ${trim(plan.resultingTempo)} BPM" +
-                if (plan.ratioExact) "  · exact" else "  · approximated",
-            if (plan.ratioExact) Palette.text else Palette.warn,
-        )
+        if (plan != null && plan.ratio != 1.0) {
+            Text(
+                "   ${trim(plan.tempo)} → ${trim(plan.resultingTempo)} BPM",
+                color = if (plan.ratioExact) Palette.dim else Palette.warn,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
     }
 
     when (s.speedMode) {
-        // The slider itself lives under the waveform now — see [PitchStrip].
-        // What stays here is everything you set once and read, rather than the
-        // one control you hold while listening.
-        SpeedMode.Semitones -> Unit
+        SpeedMode.Semitones -> Slider(
+            value = s.semitones.toFloat().coerceIn(-12f, 12f),
+            onValueChange = { raw ->
+                // A detent at unity, because "no change" has to be reachable
+                // with a finger. Without it every drag leaves a ratio of 1.003
+                // that costs a resample and buys nothing.
+                val v = raw.toDouble()
+                val snapped = if (abs(v) < DETENT_SEMITONES) 0.0 else (v * 100).roundToInt() / 100.0
+                onChange { it.copy(semitones = snapped) }
+            },
+            valueRange = -12f..12f,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
         SpeedMode.TargetBpm -> {
-            var text by remember(s.speedMode) { mutableStateOf(s.targetBpm?.let(::trim) ?: "") }
+            // The same musical span as the semitone slider: an octave either
+            // way. Deriving it from the source rather than picking absolute
+            // numbers means the two controls always cover the same ground, and
+            // the slider cannot reach a ratio the preview would have to clamp.
+            if (source != null && source > 0.0) {
+                val low = (source / 2.0).toFloat()
+                val high = (source * 2.0).toFloat()
+                Slider(
+                    value = (s.targetBpm ?: source).toFloat().coerceIn(low, high),
+                    onValueChange = { raw ->
+                        val snapped = (raw * 1000).roundToInt() / 1000.0
+                        // A detent at the source tempo, for the same reason the
+                        // semitone slider has one at zero.
+                        val v = if (abs(snapped - source) < source * 0.002) source else snapped
+                        onChange { it.copy(targetBpm = v) }
+                    },
+                    valueRange = low..high,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            // Typed as well as swept: a slider cannot land on exactly 90, and
+            // exactly 90 is usually the point.
+            var text by remember { mutableStateOf(s.targetBpm?.let(::trim) ?: "") }
+            // Adopt a value that arrived from somewhere else — the slider, or
+            // the calculator's "send to cutter". Keyed on the *value*, not on
+            // the mode: keying on the mode meant a tempo sent from the
+            // calculator while this mode was already selected left the old
+            // number sitting in the field, which is how it looked like nothing
+            // had happened.
+            LaunchedEffect(s.targetBpm) {
+                val mine = text.toDoubleOrNull()
+                if (s.targetBpm != null && s.targetBpm != mine) text = trim(s.targetBpm)
+            }
             OutlinedTextField(
                 value = text,
                 onValueChange = { entered ->
@@ -729,6 +735,7 @@ private fun SpeedControls(s: Settings, plan: Plan?, onChange: ((Settings) -> Set
         }
     }
 }
+
 
 @Composable
 private fun TapeControls(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
