@@ -368,6 +368,10 @@ pub fn params_from_json(text: &str) -> Result<(Params, bool), String> {
                 params.ratio = Some(Ratio::from_cents(number()?).map_err(|e| e.to_string())?)
             }
             "targetBpm" => params.target_bpm = Some(tempo(number()?, key)?),
+            // A length rather than a tempo — see `Params::target_frames`. The
+            // caller that uses it is the second loop, which has to match the
+            // first to the sample and cannot get there through a tempo.
+            "targetFrames" => params.target_frames = Some(count()? as usize),
             "snap" => params.snap = flag()?,
             "snapWindow" => params.snap_window = count()? as u32,
             "depth" => {

@@ -97,6 +97,16 @@ pub struct Params {
     pub ratio: Option<Ratio>,
     /// A varispeed target tempo. Ignored when `ratio` is set.
     pub target_bpm: Option<Tempo>,
+    /// A varispeed target *length*, in output frames. Outranks both of the
+    /// above when set.
+    ///
+    /// For the one case where a tempo cannot say what is wanted: a second loop
+    /// that has to be exactly as long as a first one. Going via a tempo rounds
+    /// twice — once to a bar grid, once to a frame — so two loops that agree
+    /// about the tempo can still be six frames apart, and a shared play head
+    /// has no room for that. Here the length *is* the request, and the ratio is
+    /// whatever makes it true.
+    pub target_frames: Option<usize>,
     pub snap: bool,
     pub snap_window: u32,
     pub depth: BitDepth,
@@ -124,6 +134,7 @@ impl Default for Params {
             workflow: None,
             ratio: None,
             target_bpm: None,
+            target_frames: None,
             snap: false,
             snap_window: 15,
             depth: BitDepth::default(),
@@ -394,17 +405,26 @@ pub fn run_staged(wav: &Wav, name: &str, params: &Params, stage: Stage) -> Resul
     // Varispeed, after the cut: the bar grid is exact in the original domain, so
     // resampling last costs one rounding of the output length instead of
     // compounding with the cut.
-    let ratio = resolve_ratio(params, &grid, bars)?;
-    let final_tempo = ratio.resulting_tempo(tempo)?;
-
     // The output length comes from the grid at the new tempo, never from
     // `old_length / ratio` — that would round a second time. Computed here
     // rather than read off the buffer, so it is the same number in both stages.
-    let output_frames = if ratio.is_unity() {
-        buffer.frames()
-    } else {
-        grid.resampled_length(bars, ratio) as usize
+    //
+    // Unless a length was asked for outright, in which case there is nothing to
+    // derive: the ratio comes from the two lengths and the answer is the number
+    // that was asked for. Rounding is not involved, so it cannot be off by one.
+    let (ratio, output_frames) = match params.target_frames {
+        Some(wanted) => (Ratio::to_fit(buffer.frames(), wanted)?, wanted),
+        None => {
+            let ratio = resolve_ratio(params, &grid, bars)?;
+            let frames = if ratio.is_unity() {
+                buffer.frames()
+            } else {
+                grid.resampled_length(bars, ratio) as usize
+            };
+            (ratio, frames)
+        }
     };
+    let final_tempo = ratio.resulting_tempo(tempo)?;
 
     let planning = stage == Stage::Plan;
 
@@ -736,6 +756,60 @@ mod tests {
         .unwrap();
         assert!(!straight.fade.is_none());
         assert!(matches!(straight.taken, Taken::StraightCut));
+    }
+
+    #[test]
+    fn a_wanted_length_is_delivered_to_the_sample() {
+        // The bug this exists for: a second loop cut to the first loop's
+        // *tempo* came out six frames longer than the first loop, because the
+        // tempo route rounds twice — once to a bar grid, once to a frame — and
+        // the first loop's own length had been rounded by a different path. A
+        // shared play head has no room for six frames.
+        let bytes = file(8, None);
+        let wav = Wav::parse(&bytes).unwrap();
+
+        // Deliberately not a length any tempo would land on.
+        for wanted in [8 * BAR - 6, 8 * BAR + 1, 8 * BAR, 12_345] {
+            let out = run(
+                &wav,
+                "200 loop.wav",
+                &Params { target_frames: Some(wanted), ..params() },
+            )
+            .unwrap();
+            assert_eq!(out.buffer.frames(), wanted, "asked for {wanted}");
+            assert_eq!(out.output_frames, wanted, "the plan disagreed with the cut");
+        }
+    }
+
+    #[test]
+    fn a_wanted_length_outranks_a_tempo_and_says_so_in_the_ratio() {
+        // Both set is not a conflict to refuse but an order to obey: the length
+        // is the thing that has to be true, and the ratio is whatever makes it
+        // true. Reported honestly, so the plan does not claim a tempo the cut
+        // did not land on.
+        let bytes = file(8, None);
+        let wav = Wav::parse(&bytes).unwrap();
+        let wanted = 8 * BAR * 2 - 3;
+
+        let out = run(
+            &wav,
+            "200 loop.wav",
+            &Params {
+                target_bpm: Some(Tempo::bpm(100).unwrap()),
+                target_frames: Some(wanted),
+                ..params()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(out.buffer.frames(), wanted);
+        // Half speed would have been exactly 100 BPM; three frames short of it
+        // is not, and the reported tempo has to be the one that happened.
+        assert!(
+            (out.final_tempo.value().to_f64() - 100.0).abs() > 0.000_01,
+            "reported {} BPM for a length that is not that tempo",
+            out.final_tempo.value().to_f64(),
+        );
     }
 
     #[test]

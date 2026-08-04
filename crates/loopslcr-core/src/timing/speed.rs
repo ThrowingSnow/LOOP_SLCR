@@ -101,6 +101,24 @@ impl Ratio {
         Ratio::exact(to.value() / from.value())
     }
 
+    /// The ratio that makes `frames` come out as `wanted` frames.
+    ///
+    /// Exact, and the only honest way to make two loops the same length. Going
+    /// via a tempo cannot do it: the tempo is rounded to reach a bar grid and
+    /// the grid is rounded to reach a frame, so two loops that agree about the
+    /// tempo can still disagree about the sample — and a shared play head has
+    /// no room for that disagreement.
+    ///
+    /// # Errors
+    /// If either length is zero. A loop of no frames has no speed that makes it
+    /// any other length.
+    pub fn to_fit(frames: usize, wanted: usize) -> Result<Self> {
+        if frames == 0 || wanted == 0 {
+            return Err(Error::SpeedRatio(0.0));
+        }
+        Ratio::exact(Rational::new(frames as i128, wanted as i128))
+    }
+
     pub fn to_f64(self) -> f64 {
         match self {
             Ratio::Exact(r) => r.to_f64(),
