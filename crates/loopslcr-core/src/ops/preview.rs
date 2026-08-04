@@ -39,6 +39,8 @@
 // Playback is the sample domain.
 #![allow(clippy::float_arithmetic)]
 
+use core::f64::consts::FRAC_PI_2;
+
 use crate::buffer::AudioBuffer;
 use crate::ops::resample::{Edge, SincResampler};
 
@@ -60,6 +62,110 @@ pub const MAX_RATIO: f64 = 2.0;
 /// measurement, and it is a parameter so it can be argued with.
 pub const DEFAULT_GLIDE_MS: f64 = 120.0;
 
+/// How the displacement moves from one step to the next.
+///
+/// All four are functions of the step index alone. That is the whole trick: the
+/// index runs 0, 1, … and resets at the loop boundary, so whatever the shape
+/// does, it does the same thing on the next time round. Nothing here may consult
+/// a clock, a random number generator or how long playback has been running, or
+/// the loop stops being a loop.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Shape {
+    /// Climbs a step at a time and drops back. Reads as an accelerating stutter.
+    Rise,
+    /// The same, downwards — each step reaches further back.
+    Fall,
+    /// Up and back down again. Nothing repeats twice in a row at the turn.
+    Swing,
+    /// Scattered, but the *same* scatter every time round.
+    Scatter,
+}
+
+/// A stepped displacement of the play head that always lands on the grid.
+///
+/// # What it is
+///
+/// The loop is divided into [`steps`](Motion::steps) equal pieces. On each piece
+/// boundary the play head is displaced by a whole number of pieces — never a
+/// fraction, never a millisecond — so the audio that comes out always starts
+/// where a piece starts. Bars get rearranged into bars, beats into beats.
+///
+/// # Why it stays a loop
+///
+/// Two properties do it, and both are load-bearing:
+///
+/// - **The grid is the loop, divided.** Not a duration in seconds, not a rate in
+///   hertz. A step is exactly `frames / steps`, so the grid closes at the loop
+///   boundary with nothing left over — the seam this whole tool exists to keep
+///   clean cannot be landed on from the wrong side.
+/// - **The displacement is a pure function of the step index**, which resets
+///   every time round. So the second pass through the loop is sample-identical
+///   to the first. An LFO with a period of its own would beat against the loop
+///   and produce something that never repeats, which is a fine effect and not
+///   this one.
+///
+/// # Why it crossfades
+///
+/// A jump is a discontinuity in the waveform even when it is perfectly on the
+/// grid: the sample before the jump and the sample after are unrelated, and the
+/// step between them is a click. A few milliseconds of equal-power crossfade
+/// covers it. Equal-power rather than linear because the two sides are
+/// uncorrelated — a linear fade between uncorrelated signals dips in the middle,
+/// which is audible as a hole exactly where the ear is already listening for a
+/// transient.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Motion {
+    /// How many equal pieces the loop is divided into. The grid.
+    pub steps: u32,
+    /// How far a displacement may reach, in pieces.
+    pub depth: u32,
+    pub shape: Shape,
+}
+
+/// How long a jump takes to cross over, in milliseconds.
+///
+/// Short enough not to smear a transient, long enough to cover a step edge.
+/// Below about two milliseconds the fade stops hiding the discontinuity and
+/// starts merely shortening it.
+pub const JUMP_FADE_MS: f64 = 4.0;
+
+impl Motion {
+    /// The displacement for step `index`, in steps.
+    ///
+    /// Deliberately total: a depth of zero gives zero everywhere rather than a
+    /// division by zero, and any index works, including one past the end.
+    pub fn offset(&self, index: u64) -> u64 {
+        if self.depth == 0 {
+            return 0;
+        }
+        let span = u64::from(self.depth) + 1;
+        match self.shape {
+            Shape::Rise => index % span,
+            Shape::Fall => self.depth as u64 - (index % span),
+            Shape::Swing => {
+                // A triangle of period 2·depth, so the turn does not repeat the
+                // end value twice — 0,1,2,1,0,1,2 rather than 0,1,2,2,1,0.
+                let period = u64::from(self.depth) * 2;
+                let j = index % period;
+                if j <= u64::from(self.depth) {
+                    j
+                } else {
+                    period - j
+                }
+            }
+            // A hash rather than a generator: same index, same answer, forever.
+            // Splitmix64's finaliser, which scatters adjacent integers well and
+            // is four lines rather than a dependency.
+            Shape::Scatter => {
+                let mut x = index.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                (x ^ (x >> 31)) % span
+            }
+        }
+    }
+}
+
 /// A loop, playing.
 ///
 /// Owns the audio it plays. The buffer is expected to be a finished loop — cut,
@@ -79,6 +185,20 @@ pub struct Preview {
     /// for a UI that wants to draw a cursor without asking the audio thread
     /// anything it would have to lock for.
     played: u64,
+    /// The stepped displacement, when there is one.
+    motion: Option<Motion>,
+    /// The step the play head was in last block, so a boundary can be noticed.
+    /// `u64::MAX` means "no step yet", which is not a step index anything can
+    /// reach in the lifetime of a preview.
+    step: u64,
+    /// The displacement in frames actually being played, and the one being faded
+    /// out of. Frames rather than steps, because a step is not an integer number
+    /// of frames and rounding it twice would drift.
+    displacement: f64,
+    previous: f64,
+    /// Output frames left in the crossfade, and how long it was.
+    fade_left: f64,
+    fade_length: f64,
 }
 
 impl Preview {
@@ -98,6 +218,12 @@ impl Preview {
             target: 1.0,
             glide: glide_coefficient(glide_ms, rate),
             played: 0,
+            motion: None,
+            step: u64::MAX,
+            displacement: 0.0,
+            previous: 0.0,
+            fade_left: 0.0,
+            fade_length: (JUMP_FADE_MS * 0.001 * f64::from(rate)).max(1.0),
         }
     }
 
@@ -114,8 +240,70 @@ impl Preview {
     }
 
     /// Where the play head is, in source frames.
+    ///
+    /// The *clock*, not where the audio is being read from — see
+    /// [`sounding_position`](Preview::sounding_position). This one advances
+    /// evenly and is what a seek round-trips through; displacing it would make
+    /// "stop, then resume where you were" mean somewhere the loop had jumped to.
     pub fn position(&self) -> f64 {
         self.position
+    }
+
+    /// Where the audio being heard is coming from, in source frames.
+    ///
+    /// The same as [`position`](Preview::position) with no motion. This is what
+    /// a play head on a waveform should follow: it is the part of the file you
+    /// can actually hear.
+    pub fn sounding_position(&self) -> f64 {
+        let frames = self.buffer.frames() as f64;
+        if frames <= 0.0 {
+            return 0.0;
+        }
+        (self.position + self.displacement).rem_euclid(frames)
+    }
+
+    pub fn motion(&self) -> Option<Motion> {
+        self.motion
+    }
+
+    /// Sets or clears the stepped displacement.
+    ///
+    /// Takes effect at the next step boundary rather than immediately, which is
+    /// what stops a turn of the depth control from being a click. Switching it
+    /// off is the one exception: it crossfades straight back to zero, because
+    /// "off" that waits for a boundary reads as a control that is not working.
+    ///
+    /// A motion with no steps is no motion — the grid it describes does not
+    /// exist, and dividing the loop by zero is not a musical position.
+    pub fn set_motion(&mut self, motion: Option<Motion>) {
+        let motion = motion.filter(|m| m.steps > 0);
+        if motion == self.motion {
+            return;
+        }
+        self.motion = motion;
+        if motion.is_none() {
+            self.jump_to(0.0);
+        }
+        // Forget the step we were in, so the next block reads as a boundary and
+        // the new grid is picked up there rather than half a step late.
+        self.step = u64::MAX;
+    }
+
+    /// Starts a crossfade from wherever the head is to a new displacement.
+    fn jump_to(&mut self, displacement: f64) {
+        if displacement == self.displacement {
+            return;
+        }
+        // Mid-fade, the thing being faded *out* is what is currently sounding,
+        // which is already a mixture. Taking the outgoing side as the previous
+        // displacement rather than the current one would restart the old jump.
+        self.previous = if self.fade_left > 0.0 {
+            self.previous
+        } else {
+            self.displacement
+        };
+        self.displacement = displacement;
+        self.fade_left = self.fade_length;
     }
 
     /// The rate being played right now, which may still be gliding.
@@ -173,17 +361,66 @@ impl Preview {
         let wanted = out.len() / channels;
         let length = frames as f64;
 
+        // Hoisted: the grid cannot change inside a block, and this is a division
+        // that would otherwise happen once per sample to produce the same
+        // number every time.
+        let step_frames = self
+            .motion
+            .map(|m| length / f64::from(m.steps))
+            .unwrap_or(0.0);
+
         for frame in 0..wanted {
             // Glide first, so the rate used for this sample is the one the
             // smoother has reached — the alternative leaves the output one
             // sample ahead of the rate that produced it.
             self.ratio += (self.target - self.ratio) * self.glide;
 
+            // A boundary in the *clock*, not in the displaced head: the grid is
+            // a property of the loop, so it has to be read off the thing that
+            // moves through the loop evenly. Measuring it on the displaced head
+            // would make each jump decide where the next one falls, and the
+            // pattern would wander instead of repeating.
+            if let Some(motion) = self.motion {
+                if step_frames > 0.0 {
+                    let index = (self.position / step_frames) as u64;
+                    if index != self.step {
+                        self.step = index;
+                        self.jump_to(motion.offset(index) as f64 * step_frames);
+                    }
+                }
+            }
+
+            let head = (self.position + self.displacement).rem_euclid(length);
+            // Equal power, not linear: the two sides of a jump are unrelated
+            // audio, and a linear fade between uncorrelated signals dips in the
+            // middle — a hole exactly where the ear is listening for the beat.
+            let crossing = if self.fade_left > 0.0 {
+                let t = 1.0 - self.fade_left / self.fade_length;
+                let old = (self.position + self.previous).rem_euclid(length);
+                Some((old, (t * FRAC_PI_2).cos(), (t * FRAC_PI_2).sin()))
+            } else {
+                None
+            };
+
             let base = frame * channels;
             for channel in 0..channels {
                 let source = self.buffer.channel(channel);
-                out[base + channel] =
-                    self.reader.read(source, self.position, self.ratio) as f32;
+                let sample = self.reader.read(source, head, self.ratio);
+                out[base + channel] = match crossing {
+                    Some((old, out_gain, in_gain)) => {
+                        let leaving = self.reader.read(source, old, self.ratio);
+                        (leaving * out_gain + sample * in_gain) as f32
+                    }
+                    None => sample as f32,
+                };
+            }
+
+            if self.fade_left > 0.0 {
+                self.fade_left -= 1.0;
+                if self.fade_left <= 0.0 {
+                    self.fade_left = 0.0;
+                    self.previous = self.displacement;
+                }
             }
 
             self.position += self.ratio;
@@ -375,6 +612,291 @@ mod tests {
         let mut out = vec![1.0f32; 8];
         assert_eq!(preview.read(&mut out), 0);
         assert!(out.iter().all(|&s| s == 0.0));
+    }
+
+    // --- the stepped displacement -------------------------------------------
+
+    #[test]
+    fn the_second_time_round_the_loop_is_the_same_as_the_first() {
+        // **The claim the whole feature rests on.** A displacement that moves
+        // the play head around is only musically usable if the result still
+        // repeats — otherwise it is not a loop with motion in it, it is a
+        // generative patch that happens to use a loop.
+        //
+        // It holds because the grid is the loop divided into equal pieces and
+        // the displacement is a function of the step index, which resets at the
+        // seam. Nothing about elapsed time enters into it.
+        //
+        // The *first* pass is deliberately not part of the claim, and finding
+        // out why was worth the test on its own: playback starts cold, so the
+        // first step has nothing to cross-fade from, while every later pass
+        // arrives at the seam fading out of the last step of the pass before.
+        // A first pass identical to the rest would mean pretending audio had
+        // been playing before it started. So the period is checked where a
+        // period is a meaningful idea — between two consecutive later passes.
+        for shape in [Shape::Rise, Shape::Fall, Shape::Swing, Shape::Scatter] {
+            let mut preview = Preview::new(sine(4800), 0.0);
+            preview.set_motion(Some(Motion {
+                steps: 8,
+                depth: 3,
+                shape,
+            }));
+
+            let mut cold = vec![0.0f32; 4800 * 2];
+            let mut second = vec![0.0f32; 4800 * 2];
+            let mut third = vec![0.0f32; 4800 * 2];
+            preview.read(&mut cold);
+            preview.read(&mut second);
+            preview.read(&mut third);
+
+            for (i, (a, b)) in second.iter().zip(third.iter()).enumerate() {
+                assert!(
+                    (a - b).abs() < 1e-6,
+                    "{shape:?} differs at sample {i}: {a} vs {b}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_grid_closes_at_the_seam() {
+        // The other half of "always to the right position", and the half the
+        // repetition test does *not* cover — that one passes for any grid at
+        // all, because the step index is read off a position that wraps with
+        // the loop, so the pattern restarts whatever the pieces are.
+        //
+        // What has to hold here is that the pieces tile the loop exactly. A
+        // grid measured in milliseconds — the obvious way to build an LFO —
+        // leaves a short piece at the end, and that short piece sits on the
+        // seam this tool exists to keep clean.
+        let frames = 4800usize;
+        let steps = 8u32;
+        let mut preview = Preview::new(sine(frames), 0.0);
+        preview.set_motion(Some(Motion {
+            steps,
+            depth: 3,
+            shape: Shape::Rise,
+        }));
+
+        // One frame at a time, so a boundary is seen at the frame it happens.
+        let mut boundaries = Vec::new();
+        let mut out = vec![0.0f32; 2];
+        let mut last = preview.step;
+        for frame in 0..(frames * 2) {
+            preview.read(&mut out);
+            if preview.step != last {
+                boundaries.push(frame);
+                last = preview.step;
+            }
+        }
+
+        let expected = frames / steps as usize;
+        for pair in boundaries.windows(2) {
+            assert_eq!(
+                pair[1] - pair[0],
+                expected,
+                "a piece from {} to {} in a {frames}-frame loop divided {steps} ways",
+                pair[0],
+                pair[1],
+            );
+        }
+        assert_eq!(boundaries.len(), (steps * 2) as usize, "{boundaries:?}");
+    }
+
+    #[test]
+    fn every_displacement_is_a_whole_number_of_steps() {
+        // "Always to the right position" means exactly this: a jump is a whole
+        // piece of the grid, never a fraction of one and never a duration. A
+        // displacement of two and a half beats would put the transient in the
+        // middle of nowhere and no amount of crossfading would rescue it.
+        let frames = 4800;
+        let steps = 16;
+        let step_frames = frames as f64 / steps as f64;
+
+        let mut preview = Preview::new(sine(frames), 0.0);
+        preview.set_motion(Some(Motion {
+            steps,
+            depth: 5,
+            shape: Shape::Scatter,
+        }));
+
+        let mut out = vec![0.0f32; 64 * 2];
+        for _ in 0..(frames / 64) {
+            preview.read(&mut out);
+            let displacement = preview.displacement / step_frames;
+            assert!(
+                (displacement - displacement.round()).abs() < 1e-9,
+                "displacement of {displacement} steps",
+            );
+        }
+    }
+
+    #[test]
+    fn the_displacement_never_leaves_the_loop() {
+        // It cannot read outside the cut. That is not a nicety — the buffer
+        // *is* the loop, so a head outside it is either silence or a panic.
+        let frames = 2400;
+        let mut preview = Preview::new(sine(frames), 0.0);
+        preview.set_motion(Some(Motion {
+            steps: 8,
+            depth: 7,
+            shape: Shape::Rise,
+        }));
+
+        let mut out = vec![0.0f32; 32 * 2];
+        for _ in 0..200 {
+            preview.read(&mut out);
+            let head = preview.sounding_position();
+            assert!(
+                (0.0..frames as f64).contains(&head),
+                "the head is at {head} in a {frames}-frame loop",
+            );
+        }
+    }
+
+    #[test]
+    fn a_jump_crossfades_instead_of_clicking() {
+        // A jump is a discontinuity even when it is perfectly on the grid: the
+        // sample before and the sample after are unrelated audio. Without the
+        // crossfade the step between them is a click, which is the one artefact
+        // this whole tool exists to avoid.
+        //
+        // Measured as the largest step between adjacent output samples, against
+        // the same loop playing straight. A click shows up here as a jump of
+        // most of the signal's amplitude in one sample.
+        let biggest_step = |motion: Option<Motion>| {
+            let mut preview = Preview::new(sine(4800), 0.0);
+            preview.set_motion(motion);
+            let mut out = vec![0.0f32; 4800 * 2];
+            preview.read(&mut out);
+            out.chunks(2)
+                .zip(out.chunks(2).skip(1))
+                .fold(0.0f32, |worst, (a, b)| worst.max((b[0] - a[0]).abs()))
+        };
+
+        let straight = biggest_step(None);
+        let moved = biggest_step(Some(Motion {
+            steps: 8,
+            depth: 3,
+            shape: Shape::Scatter,
+        }));
+
+        // Some excess is inevitable — a crossfade is not a splice — but it has
+        // to stay in the neighbourhood of the signal's own slew rate rather
+        // than in the neighbourhood of its amplitude.
+        assert!(
+            moved < straight * 4.0,
+            "straight steps by at most {straight}, moved by {moved}",
+        );
+    }
+
+    #[test]
+    fn switching_the_motion_off_puts_the_head_back() {
+        let mut preview = Preview::new(sine(4800), 0.0);
+        preview.set_motion(Some(Motion {
+            steps: 4,
+            depth: 3,
+            shape: Shape::Rise,
+        }));
+        let mut out = vec![0.0f32; 2400 * 2];
+        preview.read(&mut out);
+
+        preview.set_motion(None);
+        preview.read(&mut out);
+        assert!(
+            (preview.sounding_position() - preview.position()).abs() < 1e-9,
+            "still displaced by {}",
+            preview.sounding_position() - preview.position(),
+        );
+    }
+
+    #[test]
+    fn no_motion_plays_exactly_what_it_played_before() {
+        // The feature must be free when it is off. Not approximately the same
+        // audio — the same audio, sample for sample.
+        let mut plain = Preview::new(sine(1024), 0.0);
+        let mut idle = Preview::new(sine(1024), 0.0);
+        idle.set_motion(Some(Motion {
+            steps: 8,
+            depth: 0,
+            shape: Shape::Scatter,
+        }));
+
+        let mut a = vec![0.0f32; 2048];
+        let mut b = vec![0.0f32; 2048];
+        plain.read(&mut a);
+        idle.read(&mut b);
+        assert_eq!(a, b, "a depth of zero is not silence, it is no motion");
+    }
+
+    #[test]
+    fn a_grid_of_nothing_is_refused_rather_than_dividing_by_it() {
+        let mut preview = Preview::new(sine(512), 0.0);
+        preview.set_motion(Some(Motion {
+            steps: 0,
+            depth: 4,
+            shape: Shape::Rise,
+        }));
+        assert_eq!(preview.motion(), None);
+
+        let mut out = vec![0.0f32; 64];
+        preview.read(&mut out);
+        assert!(out.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn each_shape_is_a_function_of_the_step_alone() {
+        // Which is what makes the loop repeat. Asked twice for the same index,
+        // every shape has to answer the same thing — including the scattered
+        // one, whose whole trick is being a hash rather than a generator.
+        for shape in [Shape::Rise, Shape::Fall, Shape::Swing, Shape::Scatter] {
+            let motion = Motion {
+                steps: 16,
+                depth: 4,
+                shape,
+            };
+            for index in 0..64u64 {
+                assert_eq!(motion.offset(index), motion.offset(index), "{shape:?}");
+                assert!(
+                    motion.offset(index) <= 4,
+                    "{shape:?} reached {} with a depth of 4",
+                    motion.offset(index),
+                );
+            }
+        }
+
+        let rise = Motion {
+            steps: 16,
+            depth: 3,
+            shape: Shape::Rise,
+        };
+        assert_eq!(
+            (0..8).map(|i| rise.offset(i)).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 0, 1, 2, 3],
+        );
+
+        let swing = Motion {
+            steps: 16,
+            depth: 2,
+            shape: Shape::Swing,
+        };
+        assert_eq!(
+            (0..8).map(|i| swing.offset(i)).collect::<Vec<_>>(),
+            vec![0, 1, 2, 1, 0, 1, 2, 1],
+        );
+    }
+
+    #[test]
+    fn the_scattered_shape_actually_scatters() {
+        // A hash that returned a constant would pass every determinism test in
+        // this file and be nothing at all.
+        let motion = Motion {
+            steps: 32,
+            depth: 7,
+            shape: Shape::Scatter,
+        };
+        let seen: std::collections::BTreeSet<u64> = (0..32).map(|i| motion.offset(i)).collect();
+        assert!(seen.len() >= 5, "only {} distinct offsets", seen.len());
     }
 
     #[test]

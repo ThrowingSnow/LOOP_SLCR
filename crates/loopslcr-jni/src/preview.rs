@@ -35,7 +35,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use loopslcr_core::ops::preview::{Preview, DEFAULT_GLIDE_MS};
+use loopslcr_core::ops::preview::{Motion, Preview, Shape, DEFAULT_GLIDE_MS};
 use loopslcr_core::pipeline;
 use loopslcr_core::wav::Wav;
 
@@ -45,8 +45,20 @@ use crate::json::Object;
 pub struct Handle {
     /// What the UI wants, as `f64` bits. Written by the UI thread only.
     target: AtomicU64,
+    /// The stepped displacement, packed — see [`pack_motion`]. Written by the UI
+    /// thread only.
+    ///
+    /// Packed into one word rather than kept behind the mutex for the same
+    /// reason the rate is: three fields set one at a time could be read by the
+    /// audio thread half-changed, and half of a change is a grid the user never
+    /// asked for. One store, one load, and the block either sees the whole new
+    /// motion or the whole old one.
+    motion: AtomicU64,
     /// Where the play head is, as `f64` bits. Written by the audio thread only.
     position: AtomicU64,
+    /// Where the audio being heard comes from, as `f64` bits. The same as
+    /// `position` unless a motion is displacing it. Written by the audio thread.
+    sounding: AtomicU64,
     /// Output frames produced. Written by the audio thread only.
     played: AtomicU64,
     inner: Mutex<Preview>,
@@ -59,7 +71,9 @@ impl Handle {
     fn new(preview: Preview) -> Self {
         Handle {
             target: AtomicU64::new(1.0f64.to_bits()),
+            motion: AtomicU64::new(0),
             position: AtomicU64::new(0.0f64.to_bits()),
+            sounding: AtomicU64::new(0.0f64.to_bits()),
             played: AtomicU64::new(0),
             channels: preview.channel_count(),
             sample_rate: preview.sample_rate(),
@@ -78,12 +92,27 @@ impl Handle {
         self.target.store(ratio.to_bits(), Ordering::Relaxed);
     }
 
+    /// Asks for a stepped displacement, or for none. Callable from any thread.
+    ///
+    /// `steps` of zero, or `on` false, means none. An unknown shape number is
+    /// treated as the first one rather than refused: this is a control surface,
+    /// and the audio thread is the last place to start reporting errors.
+    pub fn set_motion(&self, on: bool, steps: u32, depth: u32, shape: u32) {
+        self.motion
+            .store(pack_motion(on, steps, depth, shape), Ordering::Relaxed);
+    }
+
     pub fn channels(&self) -> usize {
         self.channels
     }
 
     pub fn position(&self) -> f64 {
         f64::from_bits(self.position.load(Ordering::Relaxed))
+    }
+
+    /// Where the audio being heard comes from, in source frames.
+    pub fn sounding(&self) -> f64 {
+        f64::from_bits(self.sounding.load(Ordering::Relaxed))
     }
 
     pub fn played(&self) -> u64 {
@@ -102,9 +131,12 @@ impl Handle {
             return 0;
         };
         preview.set_target_ratio(f64::from_bits(self.target.load(Ordering::Relaxed)));
+        preview.set_motion(unpack_motion(self.motion.load(Ordering::Relaxed)));
         let frames = preview.read(out);
         self.position
             .store(preview.position().to_bits(), Ordering::Relaxed);
+        self.sounding
+            .store(preview.sounding_position().to_bits(), Ordering::Relaxed);
         self.played.store(preview.played(), Ordering::Relaxed);
         frames
     }
@@ -114,6 +146,8 @@ impl Handle {
             preview.seek(frame);
             self.position
                 .store(preview.position().to_bits(), Ordering::Relaxed);
+            self.sounding
+                .store(preview.sounding_position().to_bits(), Ordering::Relaxed);
         }
     }
 
@@ -124,9 +158,48 @@ impl Handle {
             .integer("sampleRate", self.sample_rate as i64)
             .integer("frames", self.frames as i64)
             .number("position", self.position())
+            .number("sounding", self.sounding())
             .integer("played", self.played() as i64);
         out.render()
     }
+}
+
+/// Packs a motion into one word.
+///
+/// The layout is an implementation detail of this file and its inverse — it
+/// crosses no boundary but the atomic, and nothing outside is entitled to read
+/// it. Bit 63 says whether there is a motion at all, so "off" is a distinct
+/// value rather than a depth that happens to be zero.
+fn pack_motion(on: bool, steps: u32, depth: u32, shape: u32) -> u64 {
+    if !on || steps == 0 {
+        return 0;
+    }
+    // Clamped rather than refused. These arrive from a control surface, and a
+    // depth wider than the loop is a request for something that does not exist,
+    // not an error worth failing playback over.
+    let steps = steps.min(4096);
+    let depth = depth.min(steps.saturating_sub(1));
+    // Masked, an unknown shape becomes whichever one its low bits name — a
+    // shape nobody chose, arriving as a plausible one. Out of range means the
+    // default, and it means it here rather than three layers down.
+    let shape = if shape > 3 { 0 } else { shape };
+    1 << 63 | u64::from(steps) | u64::from(depth) << 16 | u64::from(shape) << 32
+}
+
+fn unpack_motion(bits: u64) -> Option<Motion> {
+    if bits & 1 << 63 == 0 {
+        return None;
+    }
+    Some(Motion {
+        steps: (bits & 0xFFFF) as u32,
+        depth: (bits >> 16 & 0xFFFF) as u32,
+        shape: match bits >> 32 & 0b11 {
+            1 => Shape::Fall,
+            2 => Shape::Swing,
+            3 => Shape::Scatter,
+            _ => Shape::Rise,
+        },
+    })
 }
 
 /// Builds a preview of the loop `params` describes.
@@ -241,6 +314,77 @@ mod tests {
             panic!("a misspelled parameter produced a handle");
         };
         assert!(e.contains("targetBPM"), "{e}");
+    }
+
+    #[test]
+    fn a_motion_survives_the_word_it_travels_in() {
+        // The one place this can go wrong silently: a field that overlaps its
+        // neighbour comes back as a plausible-looking grid rather than as an
+        // error, and the loop plays a pattern nobody asked for.
+        for shape in [Shape::Rise, Shape::Fall, Shape::Swing, Shape::Scatter] {
+            for (steps, depth) in [(1u32, 0u32), (4, 3), (64, 7), (4096, 4095)] {
+                let number = match shape {
+                    Shape::Rise => 0,
+                    Shape::Fall => 1,
+                    Shape::Swing => 2,
+                    Shape::Scatter => 3,
+                };
+                let there = pack_motion(true, steps, depth, number);
+                let back = unpack_motion(there).expect("a motion went in");
+                assert_eq!(back.steps, steps, "{shape:?} {steps}/{depth}");
+                assert_eq!(back.depth, depth, "{shape:?} {steps}/{depth}");
+                assert_eq!(back.shape, shape, "{shape:?} {steps}/{depth}");
+            }
+        }
+
+        assert_eq!(unpack_motion(pack_motion(false, 8, 3, 0)), None, "off");
+        assert_eq!(unpack_motion(pack_motion(true, 0, 3, 0)), None, "no grid");
+
+        // A depth wider than the loop is clamped, not wrapped. Wrapped, it
+        // would come back as a tiny depth and look like a working control.
+        let wide = unpack_motion(pack_motion(true, 4, 99, 0)).expect("a motion went in");
+        assert_eq!(wide.depth, 3);
+
+        // An unknown shape is the first one rather than a panic on the audio
+        // thread — this is a control surface, not a parser.
+        let odd = unpack_motion(pack_motion(true, 4, 1, 77)).expect("a motion went in");
+        assert_eq!(odd.shape, Shape::Rise);
+    }
+
+    #[test]
+    fn the_motion_reaches_the_audio_and_the_head_says_where_it_went() {
+        let handle = create(&loop_file(8), "200 loop.wav", "{}").expect("no handle");
+        let mut out = vec![0.0f32; 512];
+
+        handle.read(&mut out);
+        assert!(
+            (handle.position() - handle.sounding()).abs() < 1e-9,
+            "displaced before anything asked for it",
+        );
+
+        // Four pieces, jumping up to three of them. Checked as "at some point
+        // during a pass" rather than "at the end of one": the pattern returns
+        // to zero displacement once per cycle, and the first version of this
+        // test happened to stop exactly there and called it a broken control.
+        handle.set_motion(true, 4, 3, 0);
+        let mut furthest = 0.0f64;
+        for _ in 0..(8 * BAR / 256 + 4) {
+            handle.read(&mut out);
+            furthest = furthest.max((handle.position() - handle.sounding()).abs());
+        }
+        assert!(
+            furthest > 1.0,
+            "the audio never left the clock; furthest was {furthest}",
+        );
+
+        handle.set_motion(false, 4, 3, 0);
+        for _ in 0..8 {
+            handle.read(&mut out);
+        }
+        assert!(
+            (handle.position() - handle.sounding()).abs() < 1e-9,
+            "still displaced after being switched off",
+        );
     }
 
     #[test]

@@ -72,6 +72,8 @@ fun CutterScreen(
     onDragMarker: ((Marker, Float) -> Unit)? = null,
     onChange: ((Settings) -> Settings) -> Unit,
     onDismissProblem: () -> Unit,
+    motion: MotionSettings = MotionSettings(),
+    onMotion: ((MotionSettings) -> MotionSettings) -> Unit = {},
 ) {
     // Two parts, and the split is the point.
     //
@@ -150,6 +152,18 @@ fun CutterScreen(
             // The file's own figures live behind the name in [Header]; what is
             // here is what a *decision* is made from.
             if (plan != null) PlanCard(plan, settings, onChange)
+
+            Section(
+                "Motion",
+                summary = if (motion.on) {
+                    "${motion.gridName(settings.sig)} · ±${motion.depth} · " +
+                        motion.shape.name.lowercase()
+                } else {
+                    "off"
+                },
+            ) {
+                MotionControls(motion, settings, plan, onMotion)
+            }
 
             Section(
                 "Source",
@@ -904,6 +918,93 @@ private fun PitchStrip(
             }
 
         }
+    }
+}
+
+/**
+ * The stepped displacement of the play head.
+ *
+ * # What it does
+ *
+ * The loop is divided into equal pieces — a bar, a beat, half a beat — and on
+ * each piece boundary the play head is displaced by a whole number of pieces.
+ * Beats get rearranged into beats. Because the grid *is* the loop divided, and
+ * because the displacement is a function of which piece you are in rather than
+ * of elapsed time, the result still repeats exactly once per loop.
+ *
+ * # What it deliberately does not do
+ *
+ * **It never reaches the file.** This is a way of listening to the cut, not a
+ * stage in making it, and Export writes the same bytes whether it is on or off.
+ * That is said on the panel rather than left to be discovered, because a control
+ * that looks like the others and quietly is not one is worse than no control.
+ */
+@Composable
+private fun MotionControls(
+    m: MotionSettings,
+    s: Settings,
+    plan: Plan?,
+    onMotion: ((MotionSettings) -> MotionSettings) -> Unit,
+) {
+    Toggle("Move the play head", m.on) { on -> onMotion { it.copy(on = on) } }
+
+    Text(
+        "The loop is cut into pieces and played out of order — always landing " +
+            "on a piece, so it stays a loop. It changes what you hear, never " +
+            "what Export writes.",
+        color = Palette.dim,
+        fontSize = 11.sp,
+    )
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("grid", color = Palette.dim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+        Spacer(Modifier.width(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            MotionSettings.divisions.forEach { per ->
+                Chip(MotionSettings.gridName(per, s.sig), m.perBar == per) {
+                    onMotion { it.copy(perBar = per) }
+                }
+            }
+        }
+    }
+
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        MotionShape.entries.forEach { shape ->
+            Chip(shape.name.lowercase(), m.shape == shape) {
+                onMotion { it.copy(shape = shape) }
+            }
+        }
+    }
+
+    // The reach, in pieces. Bounded by the loop itself: a jump further than the
+    // loop is long is the same jump wrapped round, so offering it would be
+    // offering a control that stops doing anything past a point it does not
+    // mark.
+    val pieces = m.steps(plan?.bars)
+    val most = ((pieces ?: 8) - 1).coerceIn(1, 16)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "reach   ±${m.depth} ${MotionSettings.gridName(m.perBar, s.sig)}" +
+                if (m.depth == 1) "" else "s",
+            color = Palette.dim,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+        )
+    }
+    ThinSlider(
+        value = m.depth.toFloat().coerceIn(1f, most.toFloat()),
+        onValueChange = { raw -> onMotion { it.copy(depth = raw.roundToInt()) } },
+        valueRange = 1f..most.toFloat(),
+        modifier = Modifier.fillMaxWidth().testTag("motionDepth"),
+    )
+
+    if (pieces == null) {
+        Text(
+            "no loop yet — the grid is the loop divided up, so there is nothing " +
+                "to divide until a plan lands",
+            color = Palette.warn,
+            fontSize = 11.sp,
+        )
     }
 }
 

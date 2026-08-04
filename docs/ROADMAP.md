@@ -353,7 +353,11 @@ worth exactly as much as its regression check.
   - [x] File figures behind the name instead of ahead of the controls
   - [x] Play in the corner, Open behind the name, sections that fold
         (a folded plan card still shows `clips` / `short by`)
-  - [ ] Zoom (needs peaks re-measured for a window, not scaled buckets)
+  - [x] Zoom — two fingers to magnify, one to pan; 4096 buckets measured once
+        at load and spent by the zoom, so `MAX_ZOOM` is bound to the
+        measurement rather than to taste
+  - [x] Compact rows; the typed tempo rides the varispeed strip beside the
+        speed it sets rather than sitting a slider away from it
   - [ ] BPM detector — only the 14 archive files carrying no tempo need it
   - [x] Draggable markers — they snap to bar lines, which is the only way a
         finger is allowed near a cut point; with handles, and a line that
@@ -384,6 +388,13 @@ worth exactly as much as its regression check.
   - [x] Ratio glide via one-pole smoother in the audio thread (tape inertia)
   - [x] Lock-free ratio handoff (atomic)
   - [x] Seamless loop playback across the seam
+  - [x] **Stepped motion of the play head** — the loop divided into equal
+        pieces, displaced by whole pieces on each piece boundary, so it is
+        rearranged and still repeats exactly once per loop. Four shapes, the
+        scattered one a hash of the step index rather than a generator.
+        Crossfaded 4 ms at equal power. Preview only: it never reaches the file
+  - [ ] Bake the motion into an export (needs the displacement in exact
+        rational frames, not the preview's floats)
   - [ ] Draggable play head (seek exists; nothing drives it from the waveform yet)
 - [x] Dark theme
 - [x] Instrumented tests: the engine on a real Android runtime, the screen rendered

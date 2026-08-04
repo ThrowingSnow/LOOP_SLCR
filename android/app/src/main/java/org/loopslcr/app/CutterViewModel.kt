@@ -170,14 +170,58 @@ class CutterViewModel : ViewModel() {
             if (problem == null) {
                 _playing.value = true
                 playingSettings = wanted
+                // A fresh handle knows nothing about the motion the user left
+                // switched on, and a control that silently stops applying when
+                // playback restarts reads as a broken control.
+                pushMotion()
             } else {
                 _problem.value = problem
             }
         }
     }
 
-    /** Where the play head is, for a UI that wants to draw it. */
-    fun playPosition(): Double? = player.position()
+    /**
+     * Where the play head is, for a UI that wants to draw it.
+     *
+     * The *sounding* position, not the clock: with a motion running the two are
+     * different, and the one worth drawing is the part of the file you can
+     * actually hear. A head that ignored the displacement would calmly sweep
+     * left to right while the loop jumped around underneath it.
+     */
+    fun playPosition(): Double? = player.sounding()
+
+    private val _motion = MutableStateFlow(MotionSettings())
+    val motion: StateFlow<MotionSettings> = _motion.asStateFlow()
+
+    /**
+     * Changes the stepped displacement.
+     *
+     * **No replan, no rebuild, no debounce.** The motion never reaches the
+     * pipeline — it is a way of reading the finished loop — so it goes straight
+     * to the audio and takes effect at the next step boundary. This is the one
+     * control on the screen that costs nothing at all to turn.
+     */
+    fun setMotion(change: (MotionSettings) -> MotionSettings) {
+        _motion.update(change)
+        pushMotion()
+    }
+
+    /**
+     * Hands the current motion to the audio.
+     *
+     * Called on every change, and again whenever playback starts or the plan
+     * lands, because the grid is the loop divided — so a loop that turned out
+     * to be a different number of bars is a different grid for the same setting.
+     */
+    private fun pushMotion() {
+        val m = _motion.value
+        val steps = m.steps(_plan.value?.bars)
+        if (steps == null) {
+            player.setMotion(false, 0, 0, 0)
+            return
+        }
+        player.setMotion(m.on, steps, m.depth, m.shape.ordinal)
+    }
 
     /**
      * Moves one end of the cut, by finger.
@@ -237,6 +281,10 @@ class CutterViewModel : ViewModel() {
                 if (problem == null) {
                     at?.let { player.seek(it) }
                     playingSettings = wanted
+                    // Same reason as in `togglePlay`, and also because the loop
+                    // may now be a different number of bars — which is a
+                    // different grid for the same setting.
+                    pushMotion()
                 } else {
                     _playing.value = false
                     playingSettings = null
@@ -245,6 +293,10 @@ class CutterViewModel : ViewModel() {
             }
         } else {
             player.setRatio(plan?.ratio ?: 1.0)
+            // The bars can change without the loop needing a rebuild, and the
+            // grid is the loop divided — so the same setting is a different
+            // number of pieces and has to be re-sent.
+            pushMotion()
         }
     }
 

@@ -1405,3 +1405,88 @@ griff nicht, und die Mitte griff. Ausgeschrieben mit `awaitEachGesture` und
   Erscheinungsbild, Bedienung und Haptik sind dort *benannt*, nicht gezeigt.
   Ein Schalter, der nichts tut, ist eine Lüge mit gutem Finish. Was heute darin
   steht, ist das, was schon einmal echte Zeit gekostet hat: welcher Build läuft.
+
+## 32. Das Feld neben der Zahl, die es erzeugt
+
+Das Ziel-Tempo war ein bildschirmbreites Material-Feld: schwebendes Etikett,
+56 dp Mindesthöhe, ein Daumenbreit Luft um vier Zeichen — und es stand *unter*
+dem Regler, eine halbe Seite von der Anzeige entfernt, die es erzeugt. Die Zahl,
+die man tippt, und die Zahl, die dabei herauskommt, sind eine einzige Tatsache.
+Also teilen sie sich jetzt eine Zeile: das Feld liegt im rechten Viertel des
+Varispeed-Streifens, auf Höhe von `speed`.
+
+Handgebaut statt `OutlinedTextField`, dessen Mindesthöhe genau das Problem war.
+Die Einheit steht im Kasten, nicht darüber, und das Quell-Tempo erscheint grau
+als Platzhalter — ein leeres Feld sagt so immer noch, was Leerlassen bedeutet.
+
+**Der Test misst gegen den Streifen, nicht gegen den Bildschirm.** Ein Feld,
+dessen Breite aus dem Rest besteht, den die Anzeige übrig lässt, ändert seine
+Größe bei jedem Zug am Regler.
+
+Der erste Versuch maß das falsche Kästchen: `BasicTextField` reicht seinen
+`modifier` an den Editor *innerhalb* der Dekoration weiter, also kam die
+Textbreite minus Innenabstand zurück (80.76 dp statt 96.86 dp) — die Zelle war
+längst richtig, die Messung nicht.
+
+## 33. Der Loop, der sich selbst umstellt
+
+Gewünscht als „ein LFO, der den Playhead moduliert, aber immer an die richtige
+Position, dass es ein Loop bleibt".
+
+Der Loop wird in gleiche Stücke geteilt — Takt, Schlag, halber Schlag — und auf
+jeder Stückgrenze wird der Lesekopf um eine *ganze* Anzahl Stücke versetzt.
+Schläge werden zu Schlägen umgestellt, nie zu Bruchteilen davon.
+
+Zwei Eigenschaften tragen die Sache, und beide sind tragend:
+
+- **Das Raster ist der Loop, geteilt.** Keine Dauer in Sekunden, keine Frequenz
+  in Hertz. Ein Stück ist exakt `frames / steps`, das Raster schließt an der
+  Naht ohne Rest.
+- **Die Versetzung ist eine reine Funktion des Stück-Index**, der an der Naht
+  auf null zurückspringt. Damit ist der zweite Durchlauf sample-identisch zum
+  ersten. Ein LFO mit eigener Periode würde gegen den Loop schweben und etwas
+  erzeugen, das sich nie wiederholt — ein hübscher Effekt, aber nicht dieser.
+
+Vier Formen: `rise`, `fall`, `swing`, `scatter`. Auch das Streuen ist ein *Hash*
+des Index, kein Zufallsgenerator — gleicher Index, gleiche Antwort, für immer.
+Ein Generator würde beim zweiten Durchlauf etwas anderes ausspucken, und genau
+das ist der Unterschied zwischen „umgestellt" und „kaputt".
+
+**Übergeblendet wird trotzdem.** Ein Sprung ist auch auf dem Raster ein Bruch in
+der Wellenform: das Sample davor und das danach haben nichts miteinander zu tun.
+4 ms *gleicher Leistung* (nicht linear) — zwischen unkorrelierten Signalen
+sackt eine lineare Blende in der Mitte ab, und das Loch säße genau dort, wo das
+Ohr auf den Transienten wartet.
+
+### Was der erste Test *nicht* geprüft hat
+
+Der Wiederholungs-Test bestand auch gegen ein Raster von festen 700 Frames —
+weil der Stück-Index von der Position abgelesen wird, die mit dem Loop umläuft.
+Das Muster startet also bei jedem Durchlauf neu, ganz gleich wie die Stücke
+geschnitten sind. Wiederholung und Rasterschluss sind **zwei** Behauptungen;
+die zweite braucht einen eigenen Test (`the_grid_closes_at_the_seam`), der
+nachrechnet, dass die Stücke den Loop restlos kacheln.
+
+Gegen einen freilaufenden Zähler fällt der Wiederholungs-Test dagegen sofort —
+das ist genau der falsche Bau, den er verhindern soll.
+
+### Wo es bewusst nicht hinkommt
+
+**Nichts davon erreicht die Datei.** Die Bewegung ist eine Art, den fertigen
+Schnitt zu *hören*, keine Stufe seiner Herstellung; Export schreibt dieselben
+Bytes, ob sie an ist oder aus. Deshalb steht sie auch nicht in `Settings`: ein
+Feld dort würde als Parameter mitgeschickt, würde bei jedem Dreh die Vorschau
+verwerfen und wäre still Teil des Schnitts geworden. Auf dem Bedienfeld steht
+es als Satz, statt es entdecken zu lassen.
+
+Der Playhead folgt jetzt der **klingenden** Position, nicht der Uhr. Beide
+werden getrennt veröffentlicht: zurückgesprungen wird an die Uhr, denn nach
+einem Neuaufbau dort weiterzumachen, wo der Loop gerade hingesprungen war, ist
+nicht die Stelle, an der der Hörer war.
+
+### Zweimal die eigene Arbeit gelöscht
+
+Ein `cp` aus einem älteren Backup und ein `git checkout` haben je einen frisch
+geschriebenen Test wieder entfernt — beide Male, um einen Gegenbeweis
+zurückzunehmen. Die Regel daraus: **vor dem Gegenbeweis committen**, dann ist
+Zurücksetzen billig und trifft nur das, was es treffen soll.

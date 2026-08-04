@@ -160,6 +160,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                val motion by model.motion.collectAsState()
                 val calculator by model.calculator.collectAsState()
                 val sums by model.sums.collectAsState()
                 val calculatorProblem by model.calculatorProblem.collectAsState()
@@ -202,6 +203,8 @@ class MainActivity : ComponentActivity() {
                             problem = problem,
                             playing = playing,
                             playHead = head,
+                            motion = motion,
+                            onMotion = { change -> model.setMotion(change) },
                             onPlay = { model.togglePlay() },
                             onDragMarker = { marker, at -> model.dragMarker(marker, at) },
                             onOpen = {

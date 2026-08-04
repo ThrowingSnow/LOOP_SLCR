@@ -42,7 +42,7 @@ pub mod preview;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use jni::objects::{JByteBuffer, JClass, JString};
-use jni::sys::{jbyteArray, jdouble, jfloatArray, jint, jlong, jstring};
+use jni::sys::{jboolean, jbyteArray, jdouble, jfloatArray, jint, jlong, jstring};
 use jni::JNIEnv;
 
 /// The exception thrown for every failure. See the module docs for why this one.
@@ -356,6 +356,34 @@ pub extern "system" fn Java_org_loopslcr_Native_previewSetRatio<'a>(
 ) {
     guard(&mut env, (), |_| {
         handle(handle_value)?.set_ratio(ratio);
+        Ok(())
+    })
+}
+
+/// `previewSetMotion(long handle, boolean on, int steps, int depth, int shape)`.
+///
+/// Lock-free; safe from any thread. Takes effect at the next step boundary, so
+/// turning a control while the loop plays does not click.
+///
+/// # Safety
+/// Called by the JVM with valid arguments; not to be called from Rust.
+#[no_mangle]
+pub extern "system" fn Java_org_loopslcr_Native_previewSetMotion<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    handle_value: jlong,
+    on: jboolean,
+    steps: jint,
+    depth: jint,
+    shape: jint,
+) {
+    guard(&mut env, (), |_| {
+        handle(handle_value)?.set_motion(
+            on != 0,
+            steps.max(0) as u32,
+            depth.max(0) as u32,
+            shape.max(0) as u32,
+        );
         Ok(())
     })
 }

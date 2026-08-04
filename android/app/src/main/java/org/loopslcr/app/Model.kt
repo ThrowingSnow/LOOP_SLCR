@@ -132,6 +132,69 @@ data class Plan(
 enum class SpeedMode { Semitones, TargetBpm }
 
 /**
+ * How the displacement moves from one piece of the grid to the next.
+ *
+ * The order is the wire format — the native side takes the ordinal — so these
+ * may be added to at the end and not reordered.
+ */
+enum class MotionShape { Rise, Fall, Swing, Scatter }
+
+/**
+ * The stepped displacement of the play head. A way of *listening* to the loop.
+ *
+ * **Deliberately not part of [Settings].** Nothing here reaches the pipeline,
+ * appears in a plan or changes a single byte of what Export writes: it is a
+ * reader of the finished loop, not a stage in making it. Keeping it out of
+ * [Settings] is what guarantees that — a field in there would be sent as a
+ * parameter, would invalidate the preview on every turn of a knob, and would
+ * quietly become part of the cut.
+ *
+ * The grid is expressed per bar rather than in pieces, because the number of
+ * pieces depends on how many bars the loop turned out to be, and the musical
+ * intent does not: "on every beat" means the same thing in a four-bar loop and
+ * a sixteen-bar one.
+ */
+data class MotionSettings(
+    val on: Boolean = false,
+    /** Pieces per bar. 1 is a bar, 2 a half, 4 a beat in four-four, 8 an eighth. */
+    val perBar: Int = 4,
+    /** How far a jump may reach, in pieces. */
+    val depth: Int = 1,
+    val shape: MotionShape = MotionShape.Rise,
+) {
+    /** How the grid divides a loop of [bars] bars, or null when there is no loop. */
+    fun steps(bars: Long?): Int? {
+        if (bars == null || bars <= 0 || perBar <= 0) return null
+        return (bars * perBar).toInt()
+    }
+
+    /** What the division is called, given a time signature like `4/4`. */
+    fun gridName(sig: String): String = gridName(perBar, sig)
+
+    companion object {
+        val divisions = listOf(1, 2, 4, 8)
+
+        /**
+         * A division named in beats where it is a beat, and in bars otherwise.
+         *
+         * The beat count comes from the signature rather than being assumed to
+         * be four: in 3/4 the quarter-bar division is not a beat, and calling it
+         * one would be a picture of a grid the file does not have.
+         */
+        fun gridName(perBar: Int, sig: String): String {
+            val beats = sig.substringBefore('/').trim().toIntOrNull() ?: 4
+            return when {
+                perBar == 1 -> "bar"
+                perBar == beats -> "beat"
+                perBar == beats * 2 -> "½ beat"
+                perBar == 2 -> "½ bar"
+                else -> "1/$perBar bar"
+            }
+        }
+    }
+}
+
+/**
  * Everything the user can set, in the app's own terms.
  *
  * Turned into the parameter JSON by [toJson] and nowhere else. A field left at

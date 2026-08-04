@@ -147,6 +147,79 @@ class EngineTest {
     }
 
     @Test
+    fun the_motion_rearranges_the_loop_and_still_repeats_it() {
+        // End to end, through the bridge and on the device: the claim the whole
+        // feature rests on. The play head is displaced by whole pieces of the
+        // loop, so what comes out is rearranged — and because the pattern is a
+        // function of which piece you are in rather than of elapsed time, the
+        // next time round is the same audio again. Rearranged *and* still a
+        // loop, or it is not this feature.
+        val handle = org.loopslcr.Native.previewCreate(wav, name, "{}")
+        try {
+            val frames = org.json.JSONObject(org.loopslcr.Native.previewInfo(handle))
+                .getLong("frames").toInt()
+            // Eight pieces, reaching up to three of them, scattered.
+            org.loopslcr.Native.previewSetMotion(handle, true, 8, 3, 3)
+
+            // Three passes: the first starts cold with nothing to cross-fade
+            // from, so the period is checked between the second and the third.
+            val passes = (0 until 3).map { readWholeLoop(handle, frames) }
+
+            val plain = org.loopslcr.Native.previewCreate(wav, name, "{}")
+            val straight = try {
+                readWholeLoop(plain, frames)
+            } finally {
+                org.loopslcr.Native.previewDestroy(plain)
+            }
+
+            var moved = 0
+            for (i in straight.indices) {
+                if (kotlin.math.abs(passes[0][i] - straight[i]) > 1e-4f) moved++
+            }
+            assertTrue("the motion changed nothing at all", moved > frames / 4)
+
+            for (i in passes[1].indices) {
+                assertEquals(
+                    "the loop stopped repeating at sample $i",
+                    passes[1][i],
+                    passes[2][i],
+                    1e-5f,
+                )
+            }
+
+            // And switching it off puts the audio back where the clock is.
+            org.loopslcr.Native.previewSetMotion(handle, false, 8, 3, 3)
+            readWholeLoop(handle, frames)
+            val info = org.json.JSONObject(org.loopslcr.Native.previewInfo(handle))
+            assertEquals(
+                "still displaced after being switched off",
+                info.getDouble("position"),
+                info.getDouble("sounding"),
+                1e-6,
+            )
+        } finally {
+            org.loopslcr.Native.previewDestroy(handle)
+        }
+    }
+
+    /** One loop's worth of interleaved output, in one array. */
+    private fun readWholeLoop(handle: Long, frames: Int): FloatArray {
+        val chunk = 1024
+        val block = ByteBuffer.allocateDirect(chunk * 2 * 4).order(ByteOrder.nativeOrder())
+        val out = FloatArray(frames * 2)
+        var done = 0
+        while (done < frames) {
+            val want = minOf(chunk, frames - done)
+            val got = org.loopslcr.Native.previewRead(handle, block, want)
+            block.rewind()
+            val floats = block.asFloatBuffer()
+            for (i in 0 until got * 2) out[done * 2 + i] = floats.get(i)
+            done += got
+        }
+        return out
+    }
+
+    @Test
     fun a_dead_handle_throws_rather_than_corrupting_anything() {
         val e = runCatching { org.loopslcr.Native.previewInfo(0) }.exceptionOrNull()
         assertTrue(e is IllegalStateException)

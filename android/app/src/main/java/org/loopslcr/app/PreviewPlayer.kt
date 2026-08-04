@@ -179,16 +179,42 @@ class PreviewPlayer {
         }
     }
 
+    /**
+     * Sets the stepped displacement of the play head, or turns it off.
+     *
+     * Lock-free like [setRatio], and for the same reason: this is a control
+     * being turned while the audio thread is mid-block. It also does *not*
+     * rebuild anything — the motion is a way of reading the loop, not a change
+     * to the loop, so it costs nothing to turn and takes effect on the next
+     * step boundary.
+     */
+    fun setMotion(on: Boolean, steps: Int, depth: Int, shape: Int) {
+        if (handle != 0L) {
+            runCatching { Native.previewSetMotion(handle, on, steps, depth, shape) }
+        }
+    }
+
     fun seek(frame: Double) {
         if (handle != 0L) {
             runCatching { Native.previewSeek(handle, frame) }
         }
     }
 
-    /** Where the play head is, in source frames, or null when not playing. */
-    fun position(): Double? {
+    /**
+     * Where the clock is, in source frames, or null when not playing.
+     *
+     * Advances evenly whatever the motion is doing. This is the one to seek
+     * back to: resuming at the displaced head would mean resuming somewhere the
+     * loop had jumped to, which is not where the listener was.
+     */
+    fun position(): Double? = figure("position")
+
+    /** Where the audio being heard comes from. What a play head should follow. */
+    fun sounding(): Double? = figure("sounding")
+
+    private fun figure(name: String): Double? {
         if (handle == 0L) return null
-        return runCatching { JSONObject(Native.previewInfo(handle)).getDouble("position") }
+        return runCatching { JSONObject(Native.previewInfo(handle)).getDouble(name) }
             .getOrNull()
     }
 

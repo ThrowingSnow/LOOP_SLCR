@@ -78,6 +78,20 @@ public final class Native {
     /** Asks for a new speed. Lock-free; callable from any thread, at any time. */
     public static native void previewSetRatio(long handle, double ratio);
 
+    /**
+     * Sets the stepped displacement of the play head, or turns it off.
+     *
+     * <p>The loop is divided into {@code steps} equal pieces and the head is
+     * displaced by up to {@code depth} whole pieces at each piece boundary, so
+     * what comes out always starts where a piece starts and the loop still
+     * repeats. {@code shape} is 0 rise, 1 fall, 2 swing, 3 scatter.
+     *
+     * <p>Lock-free; callable from any thread. Takes effect at the next boundary,
+     * so turning a control while the loop plays does not click.
+     */
+    public static native void previewSetMotion(
+            long handle, boolean on, int steps, int depth, int shape);
+
     /** Moves the play head, in source frames. Wraps. */
     public static native void previewSeek(long handle, double frame);
 
