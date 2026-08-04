@@ -177,6 +177,7 @@ class MainActivity : ComponentActivity() {
                 val secondProblem by model.secondProblem.collectAsState()
                 val gains by model.gains.collectAsState()
                 val masterDeck by model.master.collectAsState()
+                val masterGain by model.masterGain.collectAsState()
                 val calculator by model.calculator.collectAsState()
                 val sums by model.sums.collectAsState()
                 val calculatorProblem by model.calculatorProblem.collectAsState()
@@ -274,9 +275,11 @@ class MainActivity : ComponentActivity() {
                             first = loaded,
                             second = second,
                             gains = gains,
+                            masterGain = masterGain,
                             levels = { model.levels() },
                             playing = playing,
                             onGains = { a, b -> model.setGains(a, b) },
+                            onMasterGain = { g -> model.setMasterGain(g) },
                         )
 
                         4 -> SettingsScreen(

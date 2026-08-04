@@ -1645,7 +1645,42 @@ zwei Orte — weil man auf CUTTER 2 steht, wenn man hören will, wie der zweite
 Loop sitzt, und jemanden für einen Regler auf einen anderen Reiter zu schicken
 ist, wie ein Bedienelement aufhört, benutzt zu werden.
 
-## 39. Der Mixer misst pro Loop, nicht pro Ausgang
+## 39. Der Mixer ist ein Pult
+
+Gewünscht: ein richtiges Mischpult-Layout, mit Kanälen und dem Master.
+
+**Ein Pult liest man quer, nicht untereinander.** Drei Züge nebeneinander lassen
+einen Blick zwei Pegel vergleichen; drei Zeilen mit liegenden Reglern machen
+daraus Scrollen und eine Gedächtnisübung. Die Fader stehen senkrecht aus
+demselben Grund, aus dem sie es auf jedem Pult tun — das Auge vergleicht Höhen.
+
+Die Fader sind von Hand gezeichnet statt gedrehte `Slider`. Ein gekippter
+`Slider` misst und meldet sich weiter in seiner alten Ausrichtung; er wäre ein
+Bedienelement, das dem Layout und den Tests etwas anderes erzählt, als es zeigt
+— und dieser hier muss exakt so hoch sein wie die Anzeige daneben, damit man das
+eine gegen das andere lesen kann.
+
+**Oben ist +6 dB, Unity sitzt knapp darunter** und ist markiert. Ein Fader, der
+nur absenken kann, lässt „dieser Loop ist zu leise" ohne Bedienelement auf der
+Seite. Auf Unity rastet er ein, aus demselben Grund wie der Varispeed auf Null:
+genau 0 dB muss mit dem Finger erreichbar sein.
+
+### Der Master bewegt, was rausgeht — nicht, was die Kanäle beitragen
+
+Die Kanalanzeigen sind **post-Fader und pre-Master**, die Master-Anzeige ist
+post-Master. Das ist die Pult-Anordnung und die nützliche: die Kanäle sagen
+weiter, welcher Loop laut ist, während der Master sagt, ob das, was rausgeht, zu
+laut ist. Zöge man den Master und alle drei Anzeigen gingen mit, stünde dreimal
+dieselbe Auskunft da und die Balance wäre weg.
+
+Der Master-Gain bleibt bis ganz unten von den beiden Kanal-Gains getrennt. Ein
+Master-Zug, der beide Kanalfader umschreibt, ist ein Pult, das über die eigenen
+Pegel lügt. Er hat deshalb ein eigenes Wort in der Handle: drei `f32` sind
+sechsundneunzig Bit und passen nicht in eins — verloren geht dabei nichts, denn
+ein Block, der einen neuen Master neben einer alten Balance sieht, ist ein Pult
+mit zwei Händen darauf und kein Fehler.
+
+## 39a. Der Mixer misst pro Loop, nicht pro Ausgang
 
 Mit laufendem Swap klingt immer nur *einer* der beiden. Eine Anzeige, die die
 Summe zeigt, könnte die Frage, für die diese Seite existiert, nicht beantworten
@@ -1657,9 +1692,9 @@ sich beide, was genau das ist, was gerade passiert.
 
 - Die **Anzeige ist in Dezibel**. Linear säße alles, was einzustellen sich lohnt,
   im linken Zehntel des Balkens, und die Anzeige wäre Dekoration.
-- Der **Regler ist linear in der Lautheit**. Auf halber Strecke soll es etwa halb
-  so laut klingen, nicht 6 dB leiser. Andersherum hätte man ein Bedienelement,
-  das über den größten Teil seines Wegs fast nichts tut.
+- Der **Fader ist linear in der Lautheit** (Kubikgesetz). Auf halber Strecke soll
+  es etwa halb so laut klingen, nicht 6 dB leiser. Andersherum hätte man ein
+  Bedienelement, das über den größten Teil seines Wegs fast nichts tut.
 
 Beides hängt an einem Test, weil beides leicht falsch herum ist und keines davon
 auf einem Screenshot zu sehen wäre.

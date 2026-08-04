@@ -438,6 +438,25 @@ pub extern "system" fn Java_org_loopslcr_Native_previewSetGains<'a>(
     })
 }
 
+/// `previewSetMasterGain(long handle, float gain)`.
+///
+/// The trim on the sum, after both loop gains. Lock-free; safe from any thread.
+///
+/// # Safety
+/// Called by the JVM with valid arguments; not to be called from Rust.
+#[no_mangle]
+pub extern "system" fn Java_org_loopslcr_Native_previewSetMasterGain<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    handle_value: jlong,
+    gain: jfloat,
+) {
+    guard(&mut env, (), |_| {
+        handle(handle_value)?.set_master_gain(gain);
+        Ok(())
+    })
+}
+
 /// `previewSetPartner(long handle, ByteBuffer audio, String name, String params)`.
 ///
 /// Runs the pipeline, so it takes as long as a cut and belongs on a background

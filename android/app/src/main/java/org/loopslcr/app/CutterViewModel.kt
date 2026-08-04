@@ -183,6 +183,7 @@ class CutterViewModel : ViewModel() {
                 // The gains live in the handle too, and a fresh one starts at
                 // unity — so a level the user set would silently jump back.
                 player.setGains(_gains.value.first, _gains.value.second)
+                player.setMasterGain(_masterGain.value)
             } else {
                 _problem.value = problem
             }
@@ -359,8 +360,23 @@ class CutterViewModel : ViewModel() {
         player.setGains(first, second)
     }
 
-    /** The loudest sample each loop contributed to the last block, after gain. */
-    fun levels(): Pair<Float, Float> = player.peaks()
+    /**
+     * The trim on the sum.
+     *
+     * Kept apart from the two loop gains all the way down: a master move that
+     * rewrote both channel faders would be a console lying about where its own
+     * levels are.
+     */
+    private val _masterGain = MutableStateFlow(1f)
+    val masterGain: StateFlow<Float> = _masterGain.asStateFlow()
+
+    fun setMasterGain(gain: Float) {
+        _masterGain.value = gain
+        player.setMasterGain(gain)
+    }
+
+    /** The three meters from one block: loop 1, loop 2, and what left. */
+    fun levels(): Triple<Float, Float, Float> = player.peaks()
 
     // --- which loop the pair's speed is measured against ------------------
 
@@ -518,6 +534,8 @@ class CutterViewModel : ViewModel() {
                     pushMotion()
                     pushPair()
                     pushPartner()
+                    player.setGains(_gains.value.first, _gains.value.second)
+                    player.setMasterGain(_masterGain.value)
                 } else {
                     _playing.value = false
                     playingSettings = null

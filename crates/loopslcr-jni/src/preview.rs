@@ -58,9 +58,20 @@ pub struct Handle {
     pair: AtomicU64,
     /// The two level trims, as `f32` bits side by side. Written by the UI.
     gains: AtomicU64,
+    /// The trim on the sum, as `f32` bits. Written by the UI.
+    ///
+    /// Its own word rather than a third field beside the two loop gains, which
+    /// would not fit: three `f32` are ninety-six bits. Nothing is lost by the
+    /// split — the master is a separate decision from the balance between the
+    /// loops, and a block that saw a new master beside an old balance is a
+    /// console with two hands on it, which is a real thing and not a glitch.
+    master_gain: AtomicU64,
     /// The loudest sample each loop contributed to the last block, as `f32`
     /// bits side by side. Written by the audio thread.
     peaks: AtomicU64,
+    /// The loudest sample that left in the last block, after the master gain,
+    /// as `f32` bits. Written by the audio thread.
+    peak_master: AtomicU64,
     /// Whether a partner is installed and whether it is the one sounding, as
     /// 0/1. Written by the audio thread, so a UI can ask without taking the
     /// mutex the audio thread is holding for the length of a block.
@@ -86,7 +97,9 @@ impl Handle {
             motion: AtomicU64::new(0),
             pair: AtomicU64::new(0),
             gains: AtomicU64::new(pack_two(1.0, 1.0)),
+            master_gain: AtomicU64::new(u64::from(1.0f32.to_bits())),
             peaks: AtomicU64::new(0),
+            peak_master: AtomicU64::new(0),
             partnered: AtomicU64::new(0),
             on_second: AtomicU64::new(0),
             position: AtomicU64::new(0.0f64.to_bits()),
@@ -131,9 +144,20 @@ impl Handle {
             .store(pack_two(first, second), Ordering::Relaxed);
     }
 
+    /// Sets the trim on the sum, linear. Callable from any thread.
+    pub fn set_master_gain(&self, gain: f32) {
+        self.master_gain
+            .store(u64::from(gain.to_bits()), Ordering::Relaxed);
+    }
+
     /// The loudest sample each loop contributed to the last block, after gain.
     pub fn peaks(&self) -> (f32, f32) {
         unpack_two(self.peaks.load(Ordering::Relaxed))
+    }
+
+    /// The loudest sample that left in the last block, after the master gain.
+    pub fn master_peak(&self) -> f32 {
+        f32::from_bits(self.peak_master.load(Ordering::Relaxed) as u32)
     }
 
     /// Sets or clears the swap schedule. Callable from any thread.
@@ -229,10 +253,15 @@ impl Handle {
         preview.set_pair(unpack_pair(self.pair.load(Ordering::Relaxed)));
         let (first, second) = unpack_two(self.gains.load(Ordering::Relaxed));
         preview.set_gains(f64::from(first), f64::from(second));
+        preview.set_master_gain(f64::from(f32::from_bits(
+            self.master_gain.load(Ordering::Relaxed) as u32,
+        )));
         let frames = preview.read(out);
         let (peak_first, peak_second) = preview.peaks();
         self.peaks
             .store(pack_two(peak_first, peak_second), Ordering::Relaxed);
+        self.peak_master
+            .store(u64::from(preview.master_peak().to_bits()), Ordering::Relaxed);
         self.position
             .store(preview.position().to_bits(), Ordering::Relaxed);
         self.sounding
@@ -267,7 +296,8 @@ impl Handle {
             .bool("hasPartner", self.has_partner())
             .bool("onSecond", self.on_second())
             .number("peakFirst", f64::from(self.peaks().0))
-            .number("peakSecond", f64::from(self.peaks().1));
+            .number("peakSecond", f64::from(self.peaks().1))
+            .number("peakMaster", f64::from(self.master_peak()));
         out.render()
     }
 }

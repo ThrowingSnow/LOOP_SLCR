@@ -130,6 +130,15 @@ public final class Native {
      */
     public static native void previewSetGains(long handle, float first, float second);
 
+    /**
+     * Sets the trim on the sum, after both loop gains.
+     *
+     * <p>Its own call because it is its own decision: the loop gains balance
+     * the two against each other, this one decides how loud that balance
+     * leaves.
+     */
+    public static native void previewSetMasterGain(long handle, float gain);
+
     /** Takes the second loop away. The first keeps playing. */
     public static native void previewClearPartner(long handle);
 

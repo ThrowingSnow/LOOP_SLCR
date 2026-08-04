@@ -405,9 +405,10 @@ worth exactly as much as its regression check.
         the swap on a grid boundary, so both stay in time with nothing to
         synchronise. CUTTER 1 / CUTTER 2, and a partner of the wrong length
         refused with both frame counts rather than stretched
-  - [x] **MIX tab** — per-loop trim and a per-loop peak meter. Metered per
-        loop rather than per output, because with a swap running only one of
-        them is sounding
+  - [x] **MIX tab** — a desk: two channel strips and a master, vertical
+        faders with a meter beside each. Channels metered per loop rather than
+        per output, because with a swap running only one of them is sounding,
+        and post-their-fader/pre-master so the master does not move all three
   - [x] Master speed on both cutters, with one MSTR switch per cutter beside
         the speed slider choosing which loop the one speed is measured
         against — at most one deck at a time, and released by any hand-moved

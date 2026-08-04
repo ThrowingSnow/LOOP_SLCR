@@ -337,29 +337,97 @@ class CutterScreenTest {
     }
 
     @Test
-    fun the_meter_scale_and_the_trim_are_the_arithmetic_a_hand_expects() {
+    fun the_mixer_is_a_desk_with_two_channels_and_a_master() {
+        // Read across, not down: three strips side by side let one glance
+        // compare two levels. Stacked rows of horizontal sliders make that a
+        // scroll and a memory test.
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+        val file = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks)
+        var channels: Pair<Float, Float>? = null
+        var master: Float? = null
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                MixerScreen(
+                    first = file,
+                    second = file,
+                    gains = 1f to 1f,
+                    masterGain = 1f,
+                    levels = { Triple(0f, 0f, 0f) },
+                    playing = false,
+                    onGains = { a, b -> channels = a to b },
+                    onMasterGain = { g -> master = g },
+                )
+            }
+        }
+
+        val one = compose.onNodeWithTag("fader1").getBoundsInRoot()
+        val two = compose.onNodeWithTag("fader2").getBoundsInRoot()
+        val mst = compose.onNodeWithTag("faderMST").getBoundsInRoot()
+        assertTrue(
+            "strips at ${one.left}, ${two.left}, ${mst.left}",
+            one.left < two.left && two.left < mst.left,
+        )
+        assertTrue("channel 1 and the master are on different rows", one.top == mst.top)
+        // Taller than wide, or it is not a fader.
+        val tall = one.bottom - one.top
+        val wide = one.right - one.left
+        assertTrue("fader is $wide by $tall", tall > wide * 2)
+        // And a meter of its own height standing beside each one.
+        val meter = compose.onNodeWithTag("meter1").getBoundsInRoot()
+        assertTrue(
+            "meter ${meter.bottom - meter.top} against fader $tall",
+            meter.bottom - meter.top == tall,
+        )
+        assertTrue("meter at ${meter.left}, fader at ${one.left}", meter.left < one.left)
+
+        // Tapped in the middle of its travel, a fader lands at a quarter of the
+        // top — the cube law, felt rather than computed.
+        compose.onNodeWithTag("fader1").performClick()
+        assertEquals(0.25f, channels?.first ?: -1f, 0.03f)
+        assertEquals("the second channel moved too", 1f, channels?.second ?: -1f, 0.0001f)
+        assertEquals(null, master)
+
+        compose.onNodeWithTag("faderMST").performClick()
+        assertEquals(0.25f, master ?: -1f, 0.03f)
+
+        save(compose.onRoot().captureToImage().asAndroidBitmap(), "mixer.png")
+    }
+
+    @Test
+    fun the_meter_scale_and_the_fader_travel_are_the_arithmetic_a_hand_expects() {
         // Two decisions worth pinning, because both are easy to get backwards
         // and neither is visible in a screenshot.
         //
         // The meter is decibels: linear, everything quiet enough to be worth
-        // adjusting sits in the leftmost tenth of the bar and the meter is
-        // decoration. Full scale is the right-hand end, −48 dB the left.
+        // adjusting sits in the bottom tenth of the bar and the meter is
+        // decoration. Full scale is the top, −48 dB the bottom.
         assertEquals(1f, meterScale(1f), 0.001f)
         assertEquals(0f, meterScale(0f), 0.001f)
         assertTrue("half amplitude is not near the top: ${meterScale(0.5f)}", meterScale(0.5f) in 0.85f..0.9f)
         assertTrue("a quiet signal vanishes: ${meterScale(0.01f)}", meterScale(0.01f) > 0.1f)
 
-        // The trim is the other way round: the slider is linear in loudness, so
-        // halfway along sounds about half as loud rather than 6 dB down.
-        assertEquals(1f, loudness(1f), 0.001f)
-        assertEquals(0f, loudness(0f), 0.001f)
-        for (position in listOf(0f, 0.25f, 0.5f, 0.75f, 1f)) {
-            assertEquals(position, loudness(fromLoudness(position)), 0.001f)
+        // The fader is the other way round: linear in loudness, so halfway up
+        // sounds about half as loud rather than 6 dB down.
+        for (position in listOf(0f, 0.25f, 0.5f, 1f)) {
+            assertEquals(position, travel(fromTravel(position)), 0.001f)
         }
         assertTrue(
-            "halfway is ${decibels(fromLoudness(0.5f))}, which is not about −18 dB",
-            fromLoudness(0.5f) in 0.11f..0.14f,
+            "halfway is ${decibels(fromTravel(0.5f))}, which is not about −18 dB",
+            fromTravel(0.5f) in 0.22f..0.28f,
         )
+
+        // The top is +6 dB and unity is a little below it, where a desk puts
+        // it — a fader that could only cut leaves "too quiet" with no control.
+        assertEquals(MAX_GAIN, fromTravel(1f), 0.001f)
+        assertEquals("+6.0 dB", decibels(fromTravel(1f)))
+        assertTrue("unity sits at $UNITY_TRAVEL", UNITY_TRAVEL in 0.75f..0.82f)
+        assertEquals(1f, fromTravel(UNITY_TRAVEL), 0.0001f)
+        // And it has a detent, so exactly 0 dB is reachable with a finger.
+        assertEquals(1f, fromTravel(UNITY_TRAVEL + 0.015f), 0.0001f)
+        assertTrue("the detent never ends", fromTravel(UNITY_TRAVEL + 0.1f) > 1.05f)
     }
 
     @Test
