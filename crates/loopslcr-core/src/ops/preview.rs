@@ -434,7 +434,25 @@ impl Preview {
     ///
     /// Whole settings at a time rather than one knob at a time, so a block never
     /// runs with half a change in it. See [`FxSettings`].
-    pub fn set_fx(&mut self, settings: FxSettings) {
+    ///
+    /// `delay_sync` is how the grid gets into a delay that knows nothing about
+    /// grids. Above zero it is a fraction of the loop — an eighth, a quarter,
+    /// a whole pass — and it is resolved *here*, against the length of this loop
+    /// and the rate it is being played at, into the number of output samples the
+    /// delay counts. That division by the ratio is the entire reason a synced
+    /// delay follows the varispeed: pitch the loop up and its bar gets shorter,
+    /// so the echo has to get shorter with it or the two walk apart within a
+    /// pass. At zero the delay keeps whatever time it was given, which is what
+    /// "free" means on the panel.
+    pub fn set_fx(&mut self, mut settings: FxSettings, delay_sync: f64) {
+        if delay_sync > 0.0 && delay_sync.is_finite() {
+            let rate = if self.ratio.is_finite() && self.ratio > 1e-9 {
+                self.ratio
+            } else {
+                1.0
+            };
+            settings.delay.samples = self.buffer.frames() as f64 / rate * delay_sync;
+        }
         self.fx.set(settings);
     }
 
@@ -780,6 +798,12 @@ impl Preview {
                 out[base + channel] = left as f32;
                 self.peak_master = self.peak_master.max(left.abs() as f32);
             }
+            if !wire {
+                // Closes the frame for the delay, which has been collecting the
+                // channels' writes rather than making them — see `Delay`.
+                self.fx.advance();
+            }
+
             self.peak_first = self.peak_first.max(from_first);
             self.peak_second = self.peak_second.max(from_second);
 
@@ -1632,11 +1656,14 @@ mod tests {
         let mut preview = Preview::new(flat(frames, 0.5), 0.0);
         let mut out = vec![0.0f32; frames * 2];
 
-        preview.set_fx(FxSettings {
-            mode: crate::ops::fx::Mode::HighPass,
-            cutoff_hz: 1_000.0,
-            ..FxSettings::default()
-        });
+        preview.set_fx(
+            FxSettings {
+                mode: crate::ops::fx::Mode::HighPass,
+                cutoff_hz: 1_000.0,
+                ..FxSettings::default()
+            },
+            0.0,
+        );
         preview.read(&mut out);
 
         let tail = out[out.len() / 2..].iter().fold(0.0f32, |m, s| m.max(s.abs()));
@@ -1650,12 +1677,59 @@ mod tests {
 
         // And off is off: the same preview, the filter taken out, is the signal
         // again to the last bit.
-        preview.set_fx(FxSettings::default());
+        preview.set_fx(FxSettings::default(), 0.0);
         preview.read(&mut out);
         assert!(
             out.iter().all(|&s| s == 0.5),
             "an insert switched off did not give the signal back",
         );
+    }
+
+    #[test]
+    fn a_synced_delay_shortens_when_the_loop_is_pitched_up() {
+        // The one thing a synced delay has to do that a free one does not.
+        // Pitch the loop up and its bar gets shorter; an echo that kept its
+        // milliseconds would walk out of the grid inside a single pass.
+        let frames = 48_000usize;
+        let mut preview = Preview::new(flat(frames, 0.0), 0.0);
+
+        let quarter = FxSettings {
+            delay: crate::ops::delay::DelaySettings {
+                mix: 1.0,
+                feedback: 0.0,
+                ..Default::default()
+            },
+            ..FxSettings::default()
+        };
+
+        preview.snap_to_ratio(1.0);
+        preview.set_fx(quarter, 0.25);
+        let at_unity = preview.fx().delay.samples;
+        assert!(
+            (at_unity - 12_000.0).abs() < 1.0,
+            "a quarter of a one-second loop is {at_unity} samples",
+        );
+
+        // Twice the speed, half the echo — the same quarter of the same bar.
+        preview.snap_to_ratio(2.0);
+        preview.set_fx(quarter, 0.25);
+        let at_double = preview.fx().delay.samples;
+        assert!(
+            (at_double - 6_000.0).abs() < 1.0,
+            "at double speed the quarter became {at_double} samples",
+        );
+
+        // And a free delay is left alone, which is what free means.
+        let free = FxSettings {
+            delay: crate::ops::delay::DelaySettings {
+                mix: 1.0,
+                samples: 4_800.0,
+                ..Default::default()
+            },
+            ..FxSettings::default()
+        };
+        preview.set_fx(free, 0.0);
+        assert_eq!(preview.fx().delay.samples, 4_800.0);
     }
 
     #[test]

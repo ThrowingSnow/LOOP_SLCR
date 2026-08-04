@@ -13,6 +13,7 @@
 //! because the right answer differs between a batch run and a preview.
 
 pub mod cut;
+pub mod delay;
 pub mod dither;
 pub mod fade;
 pub mod filter;
@@ -21,9 +22,11 @@ pub mod fx;
 pub mod gain;
 pub mod preview;
 pub mod resample;
+pub mod reverb;
 pub mod tape;
 
 pub use cut::{cut, Cut};
+pub use delay::{Delay, DelaySettings};
 pub use dither::Dither;
 pub use fade::{Fade, FadeShape};
 pub use filter::Filter;
@@ -32,4 +35,5 @@ pub use fx::{Fx, FxSettings};
 pub use gain::Peak;
 pub use preview::Preview;
 pub use resample::{resample, Resampler};
+pub use reverb::{Reverb, ReverbSettings};
 pub use tape::{Tape, TapeParams};

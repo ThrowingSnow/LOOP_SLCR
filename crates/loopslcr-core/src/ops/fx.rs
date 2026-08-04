@@ -25,11 +25,24 @@
 //!
 //! Neither is the correct one, so neither is hard-wired. They are two sounds and
 //! the switch picks between them.
+//!
+//! # Why the delay and the reverb come after both, in that order
+//!
+//! Because the alternative is a room recorded through a distortion pedal. The
+//! filter and the drive are what the sound *is*; the delay and the reverb are
+//! where it *is*. Putting the space first would mean the drive flattening the
+//! tail as well as the source, which is the sound of a broken send rather than a
+//! choice anyone makes on purpose. Delay before reverb for the same reason a
+//! desk puts it there: the echoes are events in the room, so the room should
+//! hear them.
 
 // The insert is the sample domain.
 #![allow(clippy::float_arithmetic)]
 
 /// Which comes first.
+use crate::ops::delay::{Delay, DelaySettings};
+use crate::ops::reverb::{Reverb, ReverbSettings};
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum Route {
     /// Filter, then drive. The drive hears only what got through.
@@ -70,6 +83,10 @@ pub struct FxSettings {
     /// a knob that changes the level is unusable for judging a sound.
     pub output: f64,
     pub route: Route,
+    /// The echoes, after both. See [`DelaySettings`].
+    pub delay: DelaySettings,
+    /// The room, after the echoes. See [`ReverbSettings`].
+    pub reverb: ReverbSettings,
 }
 
 impl Default for FxSettings {
@@ -81,6 +98,8 @@ impl Default for FxSettings {
             drive: 0.0,
             output: 1.0,
             route: Route::FilterFirst,
+            delay: DelaySettings::default(),
+            reverb: ReverbSettings::default(),
         }
     }
 }
@@ -94,7 +113,11 @@ impl FxSettings {
     /// "Off" that still ran a filter at unity would be off to two decimal
     /// places, which is not the same claim.
     pub fn is_wire(&self) -> bool {
-        self.mode == Mode::Off && self.drive <= 0.0 && self.output == 1.0
+        self.mode == Mode::Off
+            && self.drive <= 0.0
+            && self.output == 1.0
+            && self.delay.is_wire()
+            && self.reverb.is_wire()
     }
 }
 
@@ -121,6 +144,8 @@ pub struct Fx {
     blend: f64,
     /// `[ic1eq, ic2eq]` per channel.
     state: Vec<[f64; 2]>,
+    delay: Delay,
+    reverb: Reverb,
 }
 
 impl Fx {
@@ -137,6 +162,8 @@ impl Fx {
             ceiling: 1.0,
             blend: 0.0,
             state: vec![[0.0; 2]; channels],
+            delay: Delay::new(channels, sample_rate.max(1)),
+            reverb: Reverb::new(channels, sample_rate.max(1)),
         };
         fx.set(FxSettings::default());
         fx
@@ -168,6 +195,8 @@ impl Fx {
             drive,
             output,
             route: settings.route,
+            delay: settings.delay,
+            reverb: settings.reverb,
         };
 
         // Zavalishin's TPT state variable filter. Chosen over a biquad because
@@ -189,6 +218,13 @@ impl Fx {
         self.push = 1.0 + 15.0 * drive;
         self.ceiling = self.push.tanh();
         self.blend = drive;
+
+        // Each of these clamps its own knobs, so the panel this reports back is
+        // what the boxes actually took rather than what arrived.
+        self.delay.set(settings.delay);
+        self.reverb.set(settings.reverb, self.sample_rate);
+        self.settings.delay = self.delay.settings();
+        self.settings.reverb = self.reverb.settings();
     }
 
     /// Forgets the filter's state.
@@ -199,6 +235,8 @@ impl Fx {
         for channel in self.state.iter_mut() {
             *channel = [0.0; 2];
         }
+        self.delay.reset();
+        self.reverb.reset();
     }
 
     /// Whether the insert is indistinguishable from a wire right now.
@@ -225,7 +263,19 @@ impl Fx {
                 self.filter(channel, driven)
             }
         };
-        value * self.settings.output
+        // The trim before the space, not after: it is the level of the *sound*,
+        // and moving it should change how hard the room is hit rather than how
+        // loud a room you already filled comes out.
+        let trimmed = value * self.settings.output;
+        let echoed = self.delay.process(channel, trimmed);
+        self.reverb.process(channel, echoed)
+    }
+
+    /// Closes the frame. Must be called once per frame, after every channel —
+    /// the delay collects its writes until here so that ping-pong does not
+    /// depend on which channel was processed first.
+    pub fn advance(&mut self) {
+        self.delay.advance();
     }
 
     /// The filter alone. `Mode::Off` does not touch the sample.
@@ -491,6 +541,7 @@ mod tests {
             drive: -3.0,
             output: f64::NAN,
             route: Route::FilterFirst,
+            ..FxSettings::default()
         });
         let settings = fx.settings();
         assert!(settings.cutoff_hz.is_finite() && settings.cutoff_hz >= 20.0);
