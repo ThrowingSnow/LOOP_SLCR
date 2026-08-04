@@ -18,7 +18,7 @@ import java.nio.ByteBuffer
 
 
 /** How many waveform buckets to ask for. Redrawn on resize, not re-measured. */
-private const val BUCKETS = 512
+private const val BUCKETS = 4096
 
 /** How long a setting must sit still before the plan is recomputed. */
 private const val REPLAN_DELAY_MS = 250L

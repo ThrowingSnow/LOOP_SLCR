@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
@@ -67,8 +68,10 @@ class WaveformDragTest {
         // A single block dispatches the whole gesture before Compose has redrawn
         // anything, so the handler never sees the state it broke on — the test
         // passed against the bug until it was split like this.
+        // Starting *on the start handle*, which is the only place a drag takes a
+        // marker now — the body of the waveform belongs to the zoom.
         val wave = compose.onNodeWithTag("wave")
-        wave.performTouchInput { down(centerLeft) }
+        wave.performTouchInput { down(centerLeft.copy(x = 1f)) }
         compose.waitForIdle()
         wave.performTouchInput { moveTo(centerLeft + (center - centerLeft) / 2f) }
         compose.waitForIdle()
@@ -83,6 +86,88 @@ class WaveformDragTest {
         // down. Four movements were made; every one of them has to arrive.
         assertTrue("only ${moves.size} move(s) arrived", moves.size >= 3)
         assertTrue("the drag never reached the right half: $moves", moves.any { it > 0.6f })
+    }
+
+    @Test
+    fun the_body_of_the_waveform_does_not_move_the_cut() {
+        // The rule the zoom needs. A drag anywhere used to grab whichever end
+        // was nearer, so a two-finger pinch — which starts as a finger landing
+        // in the middle — would have flung the cut across the file before the
+        // second finger ever arrived.
+        var region by mutableStateOf(0L..(8 * perBar).toLong())
+        val moves = mutableListOf<Float>()
+
+        compose.setContent {
+            Waveform(
+                peaks = peaks,
+                channels = 2,
+                frames = frames,
+                region = region,
+                samplesPerBar = perBar,
+                onDrag = { _, at -> moves += at },
+                modifier = Modifier.testTag("wave").size(320.dp, 120.dp),
+            )
+        }
+
+        val wave = compose.onNodeWithTag("wave")
+        wave.performTouchInput { down(center) }
+        compose.waitForIdle()
+        wave.performTouchInput { moveTo(centerRight) }
+        compose.waitForIdle()
+        wave.performTouchInput { up() }
+        compose.waitForIdle()
+
+        assertTrue("the middle moved the cut: $moves", moves.isEmpty())
+    }
+
+    @Test
+    fun two_fingers_spread_apart_magnify_the_view() {
+        // The grid is the honest witness: at rest eight bars put seven lines on
+        // screen, and magnifying the view has to push most of them off the
+        // edges. Counting lines rather than comparing screenshots, because the
+        // claim is "there is more file per pixel", not "the picture changed".
+        val bars = 8
+        compose.setContent {
+            Waveform(
+                peaks = FloatArray(64 * 2 * 2),
+                channels = 2,
+                frames = frames,
+                region = null,
+                samplesPerBar = frames.toDouble() / bars,
+                modifier = Modifier.testTag("wave").size(320.dp, 120.dp),
+            )
+        }
+
+        val wave = compose.onNodeWithTag("wave")
+        val before = gridLineCount(wave.captureToImage().asAndroidBitmap())
+
+        wave.performTouchInput {
+            val y = height / 2f
+            down(0, Offset(width * 0.45f, y))
+            down(1, Offset(width * 0.55f, y))
+            moveTo(0, Offset(width * 0.05f, y))
+            moveTo(1, Offset(width * 0.95f, y))
+            up(0)
+            up(1)
+        }
+        compose.waitForIdle()
+
+        val after = gridLineCount(wave.captureToImage().asAndroidBitmap())
+        assertTrue("$before lines before, $after after", after < before)
+        assertTrue("the view collapsed to nothing: $after", after >= 1)
+    }
+
+    /** Columns brighter than the background — which, on a silent file, are bar lines. */
+    private fun gridLineCount(bitmap: android.graphics.Bitmap): Int {
+        val floor = brightness(bitmap, 1)
+        var lines = 0
+        var inLine = false
+        for (x in 0 until bitmap.width) {
+            val lit = brightness(bitmap, x) > floor + 1.0
+            if (lit && !inLine) lines++
+            inLine = lit
+        }
+        return lines
     }
 
     @Test

@@ -185,6 +185,12 @@ class MainActivity : ComponentActivity() {
                         Tab(tab == 1, onClick = { tab = 1 }) {
                             Text("CALCULATOR", Modifier.padding(12.dp), fontSize = 12.sp)
                         }
+                        // A gear rather than a word: it is a third destination
+                        // but not a third of the app, and equal billing would
+                        // say otherwise.
+                        Tab(tab == 2, onClick = { tab = 2 }) {
+                            Text("\u2699", Modifier.padding(12.dp), fontSize = 16.sp)
+                        }
                     }
 
                     when (tab) {
@@ -213,6 +219,11 @@ class MainActivity : ComponentActivity() {
                             },
                             onChange = { change -> model.update(change) },
                             onDismissProblem = { model.dismissProblem() },
+                        )
+
+                        2 -> SettingsScreen(
+                            engineVersion = Engine.version,
+                            build = BuildConfig.VERSION_NAME,
                         )
 
                         else -> CalculatorScreen(

@@ -1,7 +1,10 @@
 package org.loopslcr.app
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -105,50 +108,88 @@ fun Waveform(
     val current by rememberUpdatedState(region)
 
     // Which marker the finger grabbed, decided once when the drag starts.
-    // Re-deciding per movement would let a fast drag hand the gesture to the
-    // other marker halfway through and swap the ends of the loop.
     var grabbed by remember { mutableStateOf<Marker?>(null) }
     var at by remember { mutableFloatStateOf(0f) }
 
-    val gestures = if (onDrag == null || frames <= 0L) {
-        Modifier
-    } else {
-        Modifier.pointerInput(frames) {
-            detectDragGestures(
-                onDragStart = { down ->
-                    val here = current
-                    if (here != null) {
-                        val start = size.width * (here.first.toFloat() / frames)
-                        val end = size.width * (here.last.toFloat() / frames)
-                        grabbed = if (abs(down.x - start) <= abs(down.x - end)) {
-                            Marker.Start
-                        } else {
-                            Marker.End
-                        }
-                        at = (down.x / size.width).coerceIn(0f, 1f)
-                    }
-                },
-                onDrag = { change, _ ->
-                    change.consume()
-                    at = (change.position.x / size.width).coerceIn(0f, 1f)
-                    grabbed?.let { onDrag(it, at) }
-                },
-                onDragEnd = { grabbed = null },
-                onDragCancel = { grabbed = null },
-            )
-        }
-    }
+    // The visible window: a magnification, and a left edge in file fractions.
+    // Keyed on the file — a window from the last one means nothing here.
+    var zoom by remember(frames) { mutableFloatStateOf(1f) }
+    var left by remember(frames) { mutableFloatStateOf(0f) }
 
-    Canvas(modifier.then(gestures)) {
+    Canvas(
+        modifier
+            // Two fingers to zoom; one to pan, once there is somewhere to pan to.
+            .pointerInput(frames) {
+                if (frames <= 0L) return@pointerInput
+                detectTransformGestures { centroid, pan, gestureZoom, _ ->
+                    if (grabbed != null) return@detectTransformGestures
+                    val width = size.width.toFloat()
+                    if (width <= 0f) return@detectTransformGestures
+
+                    // Zoom about the centroid, so the audio under the fingers
+                    // stays under the fingers. Anchoring to the left edge makes
+                    // a pinch feel like it is fighting you.
+                    val under = left + (centroid.x / width) / zoom
+                    zoom = (zoom * gestureZoom).coerceIn(1f, MAX_ZOOM)
+                    left = under - (centroid.x / width) / zoom - (pan.x / width) / zoom
+                    left = left.coerceIn(0f, (1f - 1f / zoom).coerceAtLeast(0f))
+                }
+            }
+            // Markers *last* in the chain, which means first to see a touch:
+            // pointer events reach the innermost handler first, and the zoom
+            // detector consumes anything past the touch slop.
+            //
+            // Written out with `awaitEachGesture` rather than with
+            // `detectDragGestures`, because the hit test has to run on the point
+            // the finger actually landed on. `onDragStart` reports the position
+            // *after* the touch slop is crossed — tens of pixels away — so a
+            // handle grab was tested against somewhere the user never touched,
+            // and both the grabbing and the not-grabbing came out wrong.
+            //
+            // It engages only on a handle. The body of the waveform belongs to
+            // the zoom: a drag anywhere on it used to take whichever end was
+            // nearer, which is how a pinch would fling the cut across the file
+            // before the second finger had landed.
+            .pointerInput(frames, onDrag) {
+                if (onDrag == null || frames <= 0L) return@pointerInput
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val here = current ?: return@awaitEachGesture
+                    val width = size.width.toFloat()
+                    if (width <= 0f) return@awaitEachGesture
+
+                    val reach = HANDLE_TOUCH_DP.dp.toPx()
+                    val startX = (here.first.toFloat() / frames - left) * zoom * width
+                    val endX = (here.last.toFloat() / frames - left) * zoom * width
+                    val took = when {
+                        abs(down.position.x - startX) <= reach -> Marker.Start
+                        abs(down.position.x - endX) <= reach -> Marker.End
+                        else -> null
+                    } ?: return@awaitEachGesture
+
+                    grabbed = took
+                    at = (left + (down.position.x / width) / zoom).coerceIn(0f, 1f)
+                    down.consume()
+
+                    drag(down.id) { change ->
+                        change.consume()
+                        at = (left + (change.position.x / width) / zoom).coerceIn(0f, 1f)
+                        onDrag(took, at)
+                    }
+                    grabbed = null
+                }
+            },
+    ) {
         val buckets = if (channels > 0) peaks.size / (channels * 2) else 0
         if (buckets == 0) return@Canvas
 
         drawRect(Palette.waveBackground)
 
-        // Where the drag will land, snapped, or null when nothing is being
-        // dragged. Snapped here as well as in the view model — through the same
-        // `Markers.barAt` — so the line cannot promise a position the commit
-        // then rounds somewhere else.
+        // File fraction to screen. Everything on this canvas goes through it, so
+        // the grid, the markers, the shading and the play head cannot disagree
+        // about where the view is.
+        fun x(fraction: Float) = (fraction - left) * zoom * size.width
+
         val held = grabbed
         val preview = if (held != null && samplesPerBar != null && samplesPerBar > 0.0) {
             Markers.fractionOfBar(Markers.barAt(at, frames, samplesPerBar), frames, samplesPerBar)
@@ -158,23 +199,19 @@ fun Waveform(
             null
         }
 
-        val left: Float?
-        val right: Float?
+        val from: Float?
+        val to: Float?
         if (region != null && frames > 0L) {
             val fromRegion = region.first.toFloat() / frames
             val toRegion = region.last.toFloat() / frames
-            left = if (held == Marker.Start && preview != null) preview else fromRegion
-            right = if (held == Marker.End && preview != null) preview else toRegion
+            from = if (held == Marker.Start && preview != null) preview else fromRegion
+            to = if (held == Marker.End && preview != null) preview else toRegion
         } else {
-            left = null
-            right = null
+            from = null
+            to = null
         }
 
-        // The bar grid, under the waveform so it reads as ruling on paper rather
-        // than as marks over the audio. No tempo detection involved: the bar
-        // length is the one the plan already computed, so a line here stands
-        // exactly where a marker would snap to.
-        gridLines(frames, samplesPerBar)
+        gridLines(frames, samplesPerBar, left, zoom)
 
         val laneHeight = size.height / channels
         for (channel in 0 until channels) {
@@ -184,19 +221,24 @@ fun Waveform(
 
             drawLine(Palette.axis, Offset(0f, mid), Offset(size.width, mid), strokeWidth = 1f)
 
-            val step = size.width / buckets
-            for (i in 0 until buckets) {
+            // Only the buckets inside the window, spread across the full width.
+            // Measuring once at a resolution the zoom can spend is what makes
+            // this instant: nothing to fetch, nothing to wait for.
+            val step = size.width * zoom / buckets
+            val firstBucket = (left * buckets).toInt().coerceIn(0, buckets - 1)
+            val lastBucket = ((left + 1f / zoom) * buckets).toInt().coerceIn(0, buckets - 1)
+            for (i in firstBucket..lastBucket) {
                 val base = (i * channels + channel) * 2
                 val low = peaks[base].coerceIn(-1f, 1f)
                 val high = peaks[base + 1].coerceIn(-1f, 1f)
-                val x = i * step
+                val px = x(i.toFloat() / buckets)
                 // A silent bucket would otherwise draw nothing at all, and a gap
                 // in the line reads as missing data rather than as silence.
                 val yTop = mid - high * scale
                 val yBottom = mid - low * scale
                 drawRect(
                     color = Palette.wave,
-                    topLeft = Offset(x, yTop),
+                    topLeft = Offset(px, yTop),
                     size = Size(maxOf(step, 1f), maxOf(yBottom - yTop, 1f)),
                 )
             }
@@ -208,24 +250,42 @@ fun Waveform(
         //
         // **After** the waveform, which is where this was wrong from the first
         // version: drawn before it, the bars painted straight over the shading
-        // and the region was invisible. It never showed on the emulator because
-        // there the cut was always the whole file, so there was nothing outside
-        // it to dim — a bug that only a real file could reveal.
-        if (left != null && right != null) {
-            drawRect(Palette.outside, Offset(0f, 0f), Size(size.width * left, size.height))
-            val end = size.width * right
-            drawRect(Palette.outside, Offset(end, 0f), Size(size.width - end, size.height))
+        // and the region was invisible.
+        if (from != null && to != null) {
+            val startX = x(from)
+            val endX = x(to)
+            if (startX > 0f) {
+                drawRect(Palette.outside, Offset(0f, 0f), Size(startX, size.height))
+            }
+            if (endX < size.width) {
+                drawRect(Palette.outside, Offset(endX, 0f), Size(size.width - endX, size.height))
+            }
 
-            marker(size.width * left, held == Marker.Start, atStart = true)
-            marker(size.width * right, held == Marker.End, atStart = false)
+            marker(startX, held == Marker.Start, atStart = true)
+            marker(endX, held == Marker.End, atStart = false)
         }
 
         if (playHead != null) {
-            val x = size.width * playHead.coerceIn(0f, 1f)
-            drawRect(Palette.playHead, Offset(x - 1f, 0f), Size(3f, size.height))
+            val px = x(playHead.coerceIn(0f, 1f))
+            drawRect(Palette.playHead, Offset(px - 1f, 0f), Size(3f, size.height))
         }
     }
 }
+
+/** How far from a marker's line a finger still counts as having taken it. */
+private const val HANDLE_TOUCH_DP = 22f
+
+/**
+ * How far in the view can go.
+ *
+ * Bounded by the measurement, not by taste. The buckets are measured once when
+ * the file opens and the zoom spends them: at [MAX_ZOOM] the window holds an
+ * eighth of them, which is the same density the whole file is drawn at
+ * unzoomed. Going further would not show more — it would show the same data
+ * drawn wider, a magnified claim rather than a closer look.
+ */
+const val MAX_ZOOM = 8f
+
 
 /**
  * The bar lines, every fourth one brighter.
@@ -241,18 +301,25 @@ fun Waveform(
  * everything in the archive is built on, and counting single bars across a
  * screen is exactly the work the grid is supposed to remove.
  */
-private fun DrawScope.gridLines(frames: Long, samplesPerBar: Double?) {
+private fun DrawScope.gridLines(
+    frames: Long,
+    samplesPerBar: Double?,
+    left: Float,
+    zoom: Float,
+) {
     if (samplesPerBar == null || samplesPerBar <= 0.0 || frames <= 0L) return
 
-    val step = size.width * (samplesPerBar / frames).toFloat()
+    val step = size.width * zoom * (samplesPerBar / frames).toFloat()
     if (!step.isFinite() || step < 4f) return
 
     val bars = (frames / samplesPerBar).toInt()
     if (bars < 1) return
 
+    val shift = left * zoom * size.width
     for (bar in 1..bars) {
-        val x = step * bar
+        val x = step * bar - shift
         if (x >= size.width) break
+        if (x < 0f) continue
         val phrase = bar % 4 == 0
         drawRect(
             color = if (phrase) Palette.gridStrong else Palette.grid,
@@ -302,6 +369,12 @@ object Palette {
     val playHead = Color(0xFF4ADE80)
     val text = Color(0xFFE8E8EC)
     val dim = Color(0xFF8A8A96)
+    /** The unfilled part of a slider track. */
+    val trackIdle = Color(0xFF3A3A47)
+    /** The border of an open group. */
+    val outline = Color(0xFF3A3A47)
+    /** The border of a folded one — present, but not asking for attention. */
+    val outlineIdle = Color(0xFF26262F)
     val warn = Color(0xFFFFB020)
     val bad = Color(0xFFFF4D4D)
 }

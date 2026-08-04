@@ -1337,3 +1337,52 @@ jetzt dort, warum: „half as fast" braucht etwas, wovon es die Hälfte sein kan
   aufklappt, fängt er die Regression: `'speed' is not displayed`.
 - Ein Test, der gegen den Fehler nicht scheitert, ist kein Test, sondern eine
   Behauptung mit Zeremonie. Zweimal in einer Runde beinahe eine abgeliefert.
+
+## 30. Zoom, und wem eine Geste gehört
+
+- **Ziehen nur noch am Griff.** Vorher nahm ein Zug irgendwo auf der Waveform
+  das jeweils nähere Ende — und das ist genau, womit ein Zwei-Finger-Zoom
+  beginnt: ein Finger, der irgendwo aufsetzt. Ohne diese Regel hätte jede Kneif-
+  Geste den Schnitt quer über die Datei geschleudert, bevor der zweite Finger
+  überhaupt gelandet wäre. Der Körper der Waveform gehört jetzt dem Zoom.
+- **Zoom ohne Nachladen.** Statt beim Zoomen in Rust neu zu messen, wird einmal
+  beim Öffnen feiner gemessen — 4096 Buckets statt 512 — und der Zoom gibt sie
+  aus. Bei 8× hält das Fenster ein Achtel davon, also dieselbe Dichte, mit der
+  die ganze Datei ungezoomt gezeichnet wird. Weiter hinein zu gehen zeigte nicht
+  mehr, sondern dasselbe breiter: eine vergrößerte Behauptung statt eines
+  näheren Blicks. Deshalb ist `MAX_ZOOM` an die Messung gebunden, nicht an
+  Geschmack. Kostet 128 KB und ist sofort.
+- **Gezoomt wird um den Schwerpunkt der Finger**, damit das Audio unter ihnen
+  liegen bleibt. Am linken Rand verankert fühlt sich eine Kneif-Geste an, als
+  würde sie sich wehren.
+
+**Zwei Fehler auf dem Weg, beide lehrreich.**
+
+*Die Reihenfolge der Gesten.* Zeigerereignisse erreichen den **innersten**
+Handler zuerst, und `detectTransformGestures` verbraucht alles jenseits des
+Touch-Slop. Mit dem Zoom als innerem Handler fraß er jeden Marker-Zug: „only 0
+move(s) arrived". Der Marker-Handler steht jetzt zuletzt in der Kette.
+
+*Der Treffertest lief auf der falschen Stelle.* `detectDragGestures` meldet in
+`onDragStart` die Position **nach** dem Überschreiten des Touch-Slop — Dutzende
+Pixel entfernt vom Aufsetzpunkt. Ein Griff wurde also gegen einen Punkt geprüft,
+den der Finger nie berührt hat, und prompt kam beides falsch heraus: der Griff
+griff nicht, und die Mitte griff. Ausgeschrieben mit `awaitEachGesture` und
+`awaitFirstDown` liegt der Treffertest dort, wo der Finger wirklich aufsetzte.
+
+## 31. Bildschirmpflege
+
+- **Die Regler sind dünn.** Materials Standard ist ein fetter runder Balken —
+  er liest sich als Fortschrittsanzeige, als etwas, das einem berichtet wird,
+  statt als etwas, das man hält. Ein Ort für alle vier Regler (Tonhöhe, Tempo,
+  Wow, Flutter), damit sie nicht zu vier Arten von Bedienelement auseinander-
+  driften.
+- **Die Falt-Dreiecke sind größer** und kommen aus einer einzigen Funktion. In
+  Fließtextgröße waren sie Satzzeichen, keine Bedienelemente.
+- **Jede Faltbox hat eine Umrandung**, offen etwas heller als zu. Eine Spalte
+  kastenloser Zeilen gibt dem Auge nichts, um eine Gruppe von der nächsten zu
+  trennen — die Überschriften lasen sich als Etiketten statt als Deckel.
+- **Ein Zahnrad-Reiter** neben CUTTER und CALCULATOR. Absichtlich fast leer:
+  Erscheinungsbild, Bedienung und Haptik sind dort *benannt*, nicht gezeigt.
+  Ein Schalter, der nichts tut, ist eine Lüge mit gutem Finish. Was heute darin
+  steht, ist das, was schon einmal echte Zeit gekostet hat: welcher Build läuft.

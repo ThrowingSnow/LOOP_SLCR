@@ -1,8 +1,11 @@
 package org.loopslcr.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -233,11 +236,7 @@ private fun Header(
                         fontFamily = FontFamily.Monospace,
                     )
                     if (loaded != null) {
-                        Text(
-                            if (open) "  ▴" else "  ▾",
-                            color = Palette.dim,
-                            fontSize = 12.sp,
-                        )
+                        Caret(open)
                     }
                 }
             }
@@ -283,6 +282,7 @@ private fun Problem(message: String, onDismiss: () -> Unit) {
 private fun Panel(content: @Composable () -> Unit) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Palette.surface),
+        border = BorderStroke(1.dp, Palette.outlineIdle),
         shape = RoundedCornerShape(8.dp),
     ) { content() }
 }
@@ -320,31 +320,128 @@ private fun Section(
 ) {
     var open by rememberSaveable(title) { mutableStateOf(initiallyOpen) }
 
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable { open = !open }
-            .padding(top = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    // An outline, because a column of unboxed rows gives the eye nothing to tell
+    // one group of controls from the next — the settings all read as one list
+    // and the headings look like labels rather than lids.
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Palette.background),
+        border = BorderStroke(1.dp, if (open) Palette.outline else Palette.outlineIdle),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        Text(
-            title.uppercase(),
-            color = Palette.dim,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(if (open) "  ▴" else "  ▾", color = Palette.dim, fontSize = 11.sp)
-        if (!open && summary != null) {
-            Text(
-                "   $summary",
-                color = Palette.dim,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-            )
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { open = !open }
+                    // A bigger target as well as a bigger mark: the whole row is
+                    // tappable, and it is now tall enough to hit without aiming.
+                    .padding(vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    title.uppercase(),
+                    color = Palette.dim,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Caret(open)
+                if (!open && summary != null) {
+                    Text(
+                        "   $summary",
+                        color = Palette.dim,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+
+            if (open) {
+                Column(
+                    Modifier.padding(bottom = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    content()
+                }
+            }
         }
     }
+}
 
-    if (open) content()
+/**
+ * A slider with a thinner track than Material's default.
+ *
+ * The stock one is a fat rounded bar — it reads as a progress meter, something
+ * being reported to you, rather than as a control you hold. Slimming the track
+ * and the thumb also buys back vertical room on a screen whose whole point is
+ * that the waveform above it never has to move.
+ *
+ * One place, so the pitch, the tempo, the wow and the flutter cannot drift into
+ * looking like four different kinds of control.
+ */
+// The `thumb` and `track` slots are still marked experimental. Taken knowingly:
+// the alternative is Material's default bar, which reads as a progress meter
+// rather than a control, and this is a slider — the least load-bearing API in
+// the app to be pinned on.
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun ThinSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+    modifier: Modifier = Modifier,
+) {
+    Slider(
+        value = value,
+        onValueChange = onValueChange,
+        valueRange = valueRange,
+        modifier = modifier.height(28.dp),
+        thumb = {
+            Box(
+                Modifier
+                    .size(width = 6.dp, height = 20.dp)
+                    .background(Palette.wave, RoundedCornerShape(3.dp)),
+            )
+        },
+        track = { state ->
+            val fraction = if (valueRange.endInclusive > valueRange.start) {
+                (state.value - valueRange.start) /
+                    (valueRange.endInclusive - valueRange.start)
+            } else {
+                0f
+            }
+            Box(Modifier.fillMaxWidth().height(4.dp)) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .background(Palette.trackIdle, RoundedCornerShape(2.dp)),
+                )
+                Box(
+                    Modifier
+                        .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                        .height(4.dp)
+                        .background(Palette.wave, RoundedCornerShape(2.dp)),
+                )
+            }
+        },
+    )
+}
+
+/**
+ * The fold marker.
+ *
+ * One place, so every triangle in the app is the same size and the same colour.
+ * It was set in the body text size, which made it a punctuation mark rather than
+ * a control — on a phone it read as a full stop that happened to be pointy.
+ */
+@Composable
+private fun Caret(open: Boolean) {
+    Text(
+        if (open) "  ▴" else "  ▾",
+        color = Palette.text,
+        fontSize = 17.sp,
+    )
 }
 
 @Composable
@@ -388,11 +485,12 @@ private fun PlanCard(p: Plan, s: Settings, onChange: ((Settings) -> Settings) ->
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "${p.bars} bars · ${trim(p.resultingTempo)} BPM · ${p.outputFrames} frames  ▾",
+                    "${p.bars} bars · ${trim(p.resultingTempo)} BPM · ${p.outputFrames} frames",
                     color = Palette.text,
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace,
                 )
+                Caret(open = false)
                 if (trouble != null) {
                     Text(
                         "   $trouble",
@@ -413,11 +511,12 @@ private fun PlanCard(p: Plan, s: Settings, onChange: ((Settings) -> Settings) ->
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "PLAN  ▴",
+                    "PLAN",
                     color = Palette.dim,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                 )
+                Caret(open = true)
             }
             Fact("cut", "${p.bars} bars from ${p.regionStart} (${p.barsSource})")
             Fact(
@@ -701,7 +800,7 @@ private fun PitchStrip(
     }
 
     when (s.speedMode) {
-        SpeedMode.Semitones -> Slider(
+        SpeedMode.Semitones -> ThinSlider(
             value = s.semitones.toFloat().coerceIn(-12f, 12f),
             onValueChange = { raw ->
                 // A detent at unity, because "no change" has to be reachable
@@ -723,7 +822,7 @@ private fun PitchStrip(
             if (source != null && source > 0.0) {
                 val low = (source / 2.0).toFloat()
                 val high = (source * 2.0).toFloat()
-                Slider(
+                ThinSlider(
                     value = (s.targetBpm ?: source).toFloat().coerceIn(low, high),
                     onValueChange = { raw ->
                         val snapped = (raw * 1000).roundToInt() / 1000.0
@@ -783,13 +882,13 @@ private fun TapeControls(s: Settings, onChange: ((Settings) -> Settings) -> Unit
     Toggle("Tape character", s.tape) { on -> onChange { it.copy(tape = on) } }
     if (s.tape) {
         Fact("wow", "%.2f %%".format(s.wow))
-        Slider(
+        ThinSlider(
             value = s.wow.toFloat(),
             onValueChange = { v -> onChange { it.copy(wow = (v * 100).roundToInt() / 100.0) } },
             valueRange = 0f..2f,
         )
         Fact("flutter", "%.2f %%".format(s.flutter))
-        Slider(
+        ThinSlider(
             value = s.flutter.toFloat(),
             onValueChange = { v -> onChange { it.copy(flutter = (v * 100).roundToInt() / 100.0) } },
             valueRange = 0f..2f,
