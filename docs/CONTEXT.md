@@ -1853,3 +1853,79 @@ ist, den eine Hand sweept, und eine grobe Stufe darin hört man als Treppe.
 **Nichts davon wird exportiert**, aus demselben Grund wie Varispeed und Motion:
 der Schnitt ist, was die Datei *ist*, das Insert ist, was deine Hände damit
 gemacht haben. Ein eingebackener Filtersweep ist kein Loop mehr.
+
+## 43. Delay und Reverb, und wo die Zahlen herkommen
+
+Der Insert ist fertig: Filter, Overdrive, Delay, Raum — in dieser Reihenfolge.
+Die ersten beiden sind, *was* der Klang ist; die letzten beiden, *wo* er ist. Den
+Raum nach vorn zu setzen hieße, dass der Overdrive auch die Fahne plattdrückt —
+das ist der Klang eines kaputten Sends, nicht der einer Entscheidung.
+
+**Nichts allokiert im Callback.** Acht Sekunden Delay-Line pro Kanal und ein
+kompletter Raum aus Kämmen und Allpässen werden angelegt, wenn das Preview
+gebaut wird. Ein Delay, das seine Line wachsen lässt, wenn man die Zeit
+aufdreht, allokiert im Callback, auf den das Betriebssystem wartet — ein
+Dropout mit guter Ausrede.
+
+**Das Delay weiß nicht, was ein Takt ist.** Es zählt Samples. „Ein Achtel" wird
+im Preview aufgelöst — gegen die Eigenlänge des Loops *und gegen das Tempo, mit
+dem er gerade läuft*. Diese Division durch die Ratio ist der ganze Grund, warum
+ein gesynctes Echo dem Varispeed folgt: pitcht man den Loop hoch, wird sein Takt
+kürzer, also muss das Echo mitkürzen — sonst laufen die beiden innerhalb eines
+Durchgangs auseinander. Die Note-Values selbst sind **pro Takt** angegeben, damit
+ein Achtel im Vier-Takter dasselbe bedeutet wie im Zweiunddreißig-Takter; die
+Taktzahl kommt aus dem Plan, und deshalb sitzt diese Umrechnung im ViewModel —
+der einzigen Schicht, die Taktzahl *und* Samplerate hat.
+
+**Ping-Pong kreuzt das Feedback, nicht das Trockene.** Ein Delay, das die Quelle
+verschiebt, wäre ein Panorama-Regler mit seltsamem Namen. Die Schreibvorgänge
+werden pro Frame gesammelt und erst am Ende ausgeführt, damit nicht die
+Reihenfolge der Kanalverarbeitung das Ergebnis entscheidet.
+
+**Feedback hört unter Eins auf.** Ein Delay bei Unity klingt nie ab, und eins
+einen Hauch darüber verdoppelt jeden Durchgang — das ist keine lange Fahne, das
+ist eine Sirene. **Freeze** ist der ehrliche Weg, nach „für immer" zu fragen, und
+er steht als Schalter da statt am oberen Ende eines Knopfes zu lauern. Freeze
+umgeht auch das Damping: ein Halten, das mit jedem Durchgang dunkler wird, wäre
+ein langes Fade mit einem Schalter davor.
+
+**Der Reverb ist Schroeder in Freeverbs Kleidern**, ausgeschrieben, weil der Kern
+keine Dependencies nimmt. Acht Kämme parallel für die Dichte, vier Allpässe in
+Reihe, damit die acht nicht wie acht Echos klingen. Die Kammlängen sind
+gegenseitig unteilbar — Längen mit gemeinsamem Faktor legen ihre Echos
+übereinander und die Fahne klingelt in dieser Periode, statt sich zu füllen. Sie
+sind bei 44,1 kHz angegeben und werden auf die tatsächliche Rate skaliert: die
+Stimmung ist eine Menge von *Zeiten*, nicht von ganzen Zahlen. Das Damping sitzt
+*in* der Kammschleife, nicht am Ausgang — ein Raum verliert Höhen pro Durchgang,
+nicht gleichmäßig. Und jeder Puffer auf dem zweiten Kanal ist ein paar Dutzend
+Samples länger, sonst sind es zwei identische Mono-Reverbs, die zur Mitte
+kollabieren.
+
+**Das Pre-Delay ist kein Realismus, sondern Platz.** Eine Fahne, die auf dem
+Transienten anfängt, begräbt ihn. Ein paar Dutzend Millisekunden lassen den
+Schlag frei und stellen den Raum dahinter — der Unterschied zwischen einem Loop
+*in* einem Raum und einem Loop *im* Nebel.
+
+## 43a. Warum das Packen aufhören musste
+
+Sechs Regler passten in zwei Wörter, und dass ein zerrissener Lesevorgang
+dazwischen harmlos war, ließ sich verteidigen: alles waren stufenlose Regler mit
+für sich gültigen Werten, halb angekommen war also eine Stellung, an der die Hand
+vorbeigekommen war.
+
+Mit einem Delay stimmt das nicht mehr. **Freeze und Ping-Pong sind Schalter,
+keine Regler.** Ein Block, der das neue Freeze neben dem alten Feedback liest,
+ist ein Zustand, den niemand bestellt hat — und bei siebzehn Feldern hört das auf,
+theoretisch zu sein.
+
+Also ein **Seqlock**: der Schreiber setzt den Generationszähler auf ungerade,
+während er arbeitet, und wieder gerade, wenn er fertig ist. Ein Leser, der eine
+ungerade Zahl sieht — oder vor und nach seinem Lesen zwei verschiedene —, weiß,
+dass er ein halbes Panel gesehen hat, und sagt das. Der Audio-Thread wartet nie;
+der Schreiber ist ein Finger auf einem Slider und kann sich die Arbeit leisten.
+Es gibt genau **einen** Schreiber, den UI-Thread, und das ist, was den Zähler
+allein ausreichen lässt.
+
+Nach zwei Versuchen gibt der Leser auf, statt zu spinnen. Dann wird nichts
+angewendet und das Preview behält das Panel, das es schon hatte: einen Block zu
+spät ist kein Geräusch — ein zerrissenes Panel schon.

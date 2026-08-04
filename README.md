@@ -219,8 +219,8 @@ immediately before quantisation.
 
 No multi-track, no codec zoo. Minimal means minimal.
 
-The Android app has a mixer and an insert — two loop faders, a master, a filter
-and an overdrive — but they live in the *preview* and none of them is rendered
+The Android app has a mixer and an insert — two loop faders, a master, a filter,
+an overdrive, a delay and a reverb — but they live in the *preview* and none of them is rendered
 into a file. The cut is what the file is; the desk is what your hands were doing
 to it. Nothing above this line has changed.
 

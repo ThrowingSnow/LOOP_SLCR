@@ -426,15 +426,19 @@ worth exactly as much as its regression check.
         meter is the one that reads it. Off is off to the bit: the preview
         asks `is_wire()` and takes the old path, so a session that never
         opens the panel gets the samples it got before there was one
-  - [ ] **The rest of the insert: delay and reverb.** The audio path may not
-        allocate, so every line has to be owned up front, and each effect
-        needs its own tests before it is worth having:
-    - [ ] Delay: time as sync divisions *or* free ms, feedback, ping-pong,
-          freeze, and a filter in the feedback path
-    - [ ] Reverb: size, damping, pre-delay, wet/dry — dependency-free, so a
-          Schroeder/FDN written here rather than a crate
-    - [ ] Baking the insert into an export, if it is ever wanted — today it
-          is a performance and the cut is what the file is
+  - [x] **Delay** — time as note divisions *or* free milliseconds, feedback,
+        damping in the feedback path, ping-pong, freeze. Eight seconds of line
+        per channel taken at build time, because the audio path may not
+        allocate. A synced echo is resolved against the loop's own length *and
+        the rate it is playing at*, so it follows the varispeed instead of
+        walking out of the grid inside one pass
+  - [x] **Reverb** — size, damping, pre-delay, mix. Schroeder in Freeverb's
+        clothes, written out rather than depended on: eight combs for density,
+        four allpasses so they stop sounding like eight echoes, damping inside
+        the comb loop, and every buffer longer on the second channel or the two
+        tails collapse to the middle
+  - [ ] Baking the insert into an export, if it is ever wanted — today it is a
+        performance and the cut is what the file is
   - [ ] Draggable play head (seek exists; nothing drives it from the waveform yet)
 - [x] Dark theme
 - [x] Instrumented tests: the engine on a real Android runtime, the screen rendered
