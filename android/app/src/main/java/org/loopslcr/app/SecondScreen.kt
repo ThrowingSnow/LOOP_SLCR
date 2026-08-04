@@ -199,7 +199,12 @@ private fun Fit(first: Loaded, firstPlan: Plan?, second: Loaded, secondPlan: Pla
             Fact("first", "${firstPlan?.bars ?: "—"} bars · ${firstPlan?.let { trim(it.tempo) } ?: "—"} BPM")
             Fact("second", "${secondPlan?.bars ?: "—"} bars · ${secondPlan?.let { trim(it.tempo) } ?: "—"} BPM")
 
-            val mine = firstPlan?.outputFrames
+            // The first loop's *own* length, not its stretched one: the
+            // preview plays it unstretched and the varispeed moves both
+            // together afterwards. Comparing against the stretched number was
+            // how this panel came to report thousands of frames out while the
+            // pair was in fact one frame from fitting.
+            val mine = firstPlan?.loopFrames
             val theirs = secondPlan?.outputFrames
             Fact("frames", "${theirs ?: "—"} against ${mine ?: "—"}")
 
@@ -212,9 +217,9 @@ private fun Fit(first: Loaded, firstPlan: Plan?, second: Loaded, secondPlan: Pla
                     fontSize = 11.sp,
                 )
                 mine != null && theirs != null && mine != theirs -> Text(
-                    "${theirs - mine} frames out. Usually a tempo one of the " +
-                        "files does not declare — set it under SOURCE and the " +
-                        "arithmetic becomes exact.",
+                    "${theirs - mine} frames out. The second loop is cut to the " +
+                        "first one's length, so this should be zero — if it is " +
+                        "not, the bar count is the thing to look at.",
                     color = Palette.warn,
                     fontSize = 11.sp,
                 )

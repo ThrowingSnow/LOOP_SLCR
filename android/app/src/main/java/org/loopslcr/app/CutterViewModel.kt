@@ -229,15 +229,24 @@ class CutterViewModel : ViewModel() {
     /**
      * The parameters that make the second file fit the first.
      *
-     * This is the whole trick, and it is only possible because both tempi are
-     * known exactly: the second loop is cut to the *first* loop's bar count and
-     * pulled to the first loop's own tempo, with the same exact rational
-     * arithmetic as any other cut. What comes out is the same number of frames,
-     * so one play head can serve both.
+     * This is the whole trick: the second loop is cut to the *first* loop's bar
+     * count and then to the first loop's exact length in frames, with the same
+     * rational arithmetic as any other cut. What comes out is the same number of
+     * frames, so one play head can serve both.
      *
-     * The first loop's *source* tempo, not its target: the preview plays the cut
-     * at its own tempo and the varispeed is applied live to the whole handle, so
-     * both loops are already moving together by the time a ratio is involved.
+     * **The length, not the tempo.** It was the tempo, and it was wrong by six
+     * frames on a real pair of loops: the tempo route rounds twice on the way to
+     * a length — once to a bar grid, once to a frame — and the first loop's own
+     * length had been reached by a different path. Two loops that agree about
+     * the tempo can still disagree about the sample, and a shared play head has
+     * no room for that disagreement. The tempo still goes along, because it is
+     * what makes the ratio sane and is what the plan reports; the length is what
+     * has to come true.
+     *
+     * The first loop's *source* tempo and *unstretched* length, not its target:
+     * the preview plays the cut at its own tempo and the varispeed is applied
+     * live to the whole handle, so both loops are already moving together by the
+     * time a ratio is involved.
      */
     private fun partnerSettings(): Settings? {
         val mine = _plan.value ?: return null
@@ -248,8 +257,18 @@ class CutterViewModel : ViewModel() {
             speedMode = SpeedMode.TargetBpm,
             targetBpm = mine.tempo,
             snap = false,
+            targetFrames = firstLength(),
         )
     }
+
+    /**
+     * How long the first loop is, in frames, as the second one must match it.
+     *
+     * From the running preview when there is one — that buffer *is* what the
+     * partner joins, so nothing beats asking it — and from the plan otherwise,
+     * so the dry run on CUTTER 2 shows the same numbers the audio will use.
+     */
+    private fun firstLength(): Long? = player.frames() ?: _plan.value?.loopFrames
 
     fun openSecond(name: String, bytes: ByteBuffer) {
         viewModelScope.launch {

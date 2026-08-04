@@ -299,6 +299,15 @@ data class Settings(
     val flutter: Double = 0.15,
     val allowShort: Boolean = false,
     val snap: Boolean = false,
+    /**
+     * Cut this loop to exactly this many frames, whatever tempo that takes.
+     *
+     * Only the second loop uses it, and only because a tempo cannot express
+     * what it needs: the two loops share one play head, so they have to agree
+     * to the sample, and the tempo route rounds twice on the way — once to a
+     * bar grid, once to a frame. Set, it outranks the speed settings.
+     */
+    val targetFrames: Long? = null,
 ) {
     /**
      * Whether these settings describe the same loop as [other], ignoring speed.
@@ -328,6 +337,7 @@ data class Settings(
         if (normalize) o.put("normalize", true)
         if (allowShort) o.put("allowShort", true)
         if (snap) o.put("snap", true)
+        targetFrames?.let { o.put("targetFrames", it) }
         if (tape) {
             o.put("tape", true)
             o.put("wow", wow)

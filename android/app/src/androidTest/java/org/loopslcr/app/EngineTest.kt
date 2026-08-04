@@ -203,6 +203,43 @@ class EngineTest {
     }
 
     @Test
+    fun a_second_loop_is_cut_to_the_first_one_s_length_and_not_to_its_tempo() {
+        // Reported from the phone: "CUTTER 2 does not run with the swap", with
+        // `the second loop is a different length — 769745 frames against
+        // 769739`. Six frames, on a pair whose tempi were both known exactly.
+        //
+        // The tempo route rounds twice on the way to a length — once to a bar
+        // grid, once to a frame — and the first loop's own length had been
+        // reached by a different path. So the request is now the length itself.
+        val handle = org.loopslcr.Native.previewCreate(wav, name, "{}")
+        try {
+            val frames = org.json.JSONObject(org.loopslcr.Native.previewInfo(handle))
+                .getLong("frames")
+
+            // A tempo that lands nowhere near the first loop's length, so the
+            // only thing that can make this fit is the length itself.
+            org.loopslcr.Native.previewSetPartner(
+                handle,
+                org.loopslcr.Native.direct(wav(bars = 8, tone = 0.11)),
+                "200 other.wav",
+                Settings(
+                    bars = 8L,
+                    speedMode = SpeedMode.TargetBpm,
+                    targetBpm = 190.0,
+                    targetFrames = frames,
+                ).toJson(),
+            )
+            assertTrue(
+                "the partner did not take",
+                org.json.JSONObject(org.loopslcr.Native.previewInfo(handle))
+                    .getBoolean("hasPartner"),
+            )
+        } finally {
+            org.loopslcr.Native.previewDestroy(handle)
+        }
+    }
+
+    @Test
     fun a_second_loop_alternates_with_the_first_and_shares_its_clock() {
         // The pair, end to end on the device. Two files of the same length at
         // different tempi in their names, so the second is pulled to the first

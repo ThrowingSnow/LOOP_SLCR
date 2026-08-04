@@ -233,6 +233,20 @@ class PreviewPlayer {
         }
     }
 
+    /**
+     * How long the loop that is playing actually is, in frames.
+     *
+     * The number a second loop has to match, read from the thing itself rather
+     * than worked out again from a tempo — which is exactly the arithmetic that
+     * put the two six frames apart.
+     */
+    fun frames(): Long? {
+        if (handle == 0L) return null
+        return runCatching {
+            JSONObject(Native.previewInfo(handle)).getLong("frames")
+        }.getOrNull()
+    }
+
     /** Sets the trim on the sum, after both loop gains. Lock-free. */
     fun setMasterGain(gain: Float) {
         if (handle != 0L) {
