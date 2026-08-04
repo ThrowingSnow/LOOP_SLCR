@@ -1768,3 +1768,35 @@ Und: `Display` ist bewusst von `Settings` getrennt. Die einen beschreiben einen
 Schnitt und gehören zu einer Datei, die anderen beschreiben einen Bildschirm und
 gehören zu einem Menschen.
 
+## 41. Sechs Frames, und warum ein Tempo sie nicht findet
+
+Vom Telefon gemeldet: „CUTTER 2 läuft nicht mit dem Swap", dazu rot
+`the second loop is a different length — 769745 frames against 769739`. Sechs
+Frames, bei einem Paar, dessen Tempi beide exakt bekannt waren.
+
+**Der Weg über das Tempo rundet zweimal.** Einmal auf ein Taktraster, einmal auf
+einen Frame. Der erste Loop war über einen anderen Weg zu seiner Länge gekommen
+als der zweite — also waren sich die beiden über das *Tempo* einig und über den
+*Sample* nicht. Ein gemeinsamer Lesekopf hat für diese Uneinigkeit keinen Platz;
+er ist der Grund, warum das Paar überhaupt ohne Synchronisation funktioniert.
+
+Die Anfrage ist deshalb jetzt **die Länge selbst**: `targetFrames` in den
+Parametern, `Ratio::to_fit(frames, wanted)` im Kern. Kein Zwischenschritt, keine
+Rundung — die Länge *ist* die Bitte, und das Verhältnis ist, was sie wahr macht.
+Gesetzt schlägt sie Halbtöne und Ziel-BPM; das Tempo fährt weiter mit, weil es
+das ist, was der Plan meldet.
+
+Genommen wird die Zahl **vom laufenden Preview**, wenn es eins gibt: dieser
+Puffer *ist* das, wozu der Partner dazukommt, und ihn zu fragen schlägt jedes
+Nachrechnen. Ohne Wiedergabe kommt sie aus dem Plan, damit der Trockenlauf auf
+CUTTER 2 dieselben Zahlen zeigt wie später das Audio.
+
+Dazu ein zweiter Fehler in derselben Anzeige: das Fit-Feld verglich gegen die
+*gedehnte* Länge des ersten Loops und meldete „13745 frames out", während das
+Paar sechs Frames vom Passen entfernt war. Der Preview spielt den ersten Loop
+ungedehnt, der Varispeed bewegt danach beide zusammen — verglichen wird jetzt
+gegen die Eigenlänge.
+
+Der Gegenbeweis steht als Test: ohne `targetFrames` fällt er mit genau der
+Fehlermeldung, die auf dem Telefon stand.
+
