@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.captureToImage
@@ -24,6 +25,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onRoot
 import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -376,8 +378,10 @@ class CutterScreenTest {
             one.top < two.top && two.top < mst.top,
         )
         assertTrue("a row is wider than it is tall", one.right - one.left > one.bottom - one.top)
-        // All three still say 0.0 dB, from the same arithmetic as the desk.
-        compose.onAllNodesWithText("+0.0 dB").assertCountEquals(3)
+        // All three still say 0.0 dB, from the same arithmetic as the desk —
+        // and so does the insert's output trim, which is a fourth reading of the
+        // same number because it is the same fader arithmetic underneath.
+        compose.onAllNodesWithText("+0.0 dB").assertCountEquals(4)
 
         save(compose.onRoot().captureToImage().asAndroidBitmap(), "mixer-rows.png")
     }
@@ -526,6 +530,83 @@ class CutterScreenTest {
         assertEquals(0.25f, master ?: -1f, 0.03f)
 
         save(compose.onRoot().captureToImage().asAndroidBitmap(), "mixer.png")
+    }
+
+    @Test
+    fun the_insert_is_on_the_desk_and_says_whether_it_is_in_the_path() {
+        // An insert belongs beside the meter that reads it. On its own tab it
+        // would be a control you turn while looking at a picture of a different
+        // signal.
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+        val file = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks)
+        var fx by mutableStateOf(Fx())
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                MixerScreen(
+                    first = file,
+                    second = null,
+                    gains = 1f to 1f,
+                    masterGain = 1f,
+                    levels = { Triple(0f, 0f, 0f) },
+                    playing = false,
+                    onGains = { _, _ -> },
+                    onMasterGain = { },
+                    fx = fx,
+                    onFx = { fx = it },
+                )
+            }
+        }
+
+        // Untouched, it says so — and says it because it is true, not because
+        // the mode happens to read "OFF".
+        compose.onNodeWithTag("fxState").assertTextEquals("bypassed")
+
+        compose.onNodeWithTag("fxModeHighPass").performClick()
+        compose.runOnIdle {
+            assertEquals(FxMode.HighPass, fx.mode)
+            assertFalse("a highpass in the path still called itself a wire", fx.isWire)
+        }
+        compose.onNodeWithTag("fxState").assertTextEquals("in the signal path")
+
+        // The order is a switch with two positions, and picking one is picking
+        // the other off.
+        compose.onNodeWithTag("fxRouteDriveFirst").performClick()
+        compose.runOnIdle { assertEquals(FxRoute.DriveFirst, fx.route) }
+        compose.onNodeWithTag("fxRouteFilterFirst").performClick()
+        compose.runOnIdle { assertEquals(FxRoute.FilterFirst, fx.route) }
+
+        // And it is above the notes about what is still to come, not instead of
+        // them: delay and reverb are still owed.
+        compose.onNodeWithTag("fxCutoff").assertExists()
+        compose.onNodeWithTag("fxDrive").assertExists()
+        compose.onNodeWithTag("fxOutput").assertExists()
+    }
+
+    @Test
+    fun the_cutoff_sweep_gives_every_octave_the_same_room() {
+        // Linear travel would spend nine tenths of the slider above 2 kHz and
+        // leave the octave the bass lives in about a millimetre. Three decades,
+        // a third of the sweep each, so a semitone costs the same distance
+        // wherever the corner is.
+        assertEquals(0f, cutoffTravel(FX_LOW_HZ), 0.001f)
+        assertEquals(1f, cutoffTravel(FX_HIGH_HZ), 0.001f)
+        // The middle of the slider is the geometric middle of the range, not
+        // the arithmetic one — 632 Hz rather than 10 kHz.
+        assertTrue("the middle is ${cutoffFrom(0.5f)} Hz", cutoffFrom(0.5f) in 600f..680f)
+
+        for (hz in listOf(20f, 80f, 440f, 1_000f, 8_000f, 20_000f)) {
+            assertEquals(hz, cutoffFrom(cutoffTravel(hz)), hz * 0.001f)
+        }
+        // An octave costs the same travel down low as up high.
+        val low = cutoffTravel(160f) - cutoffTravel(80f)
+        val high = cutoffTravel(8_000f) - cutoffTravel(4_000f)
+        assertEquals(low, high, 0.001f)
+
+        assertEquals("440 Hz", cutoffLabel(440f))
+        assertEquals("4.40 kHz", cutoffLabel(4_400f))
     }
 
     @Test

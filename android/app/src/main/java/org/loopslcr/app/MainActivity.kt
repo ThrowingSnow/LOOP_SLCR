@@ -185,6 +185,7 @@ class MainActivity : ComponentActivity() {
                 val gains by model.gains.collectAsState()
                 val masterDeck by model.master.collectAsState()
                 val masterGain by model.masterGain.collectAsState()
+                val fx by model.fx.collectAsState()
                 var display by remember { mutableStateOf(first) }
                 val calculator by model.calculator.collectAsState()
                 val sums by model.sums.collectAsState()
@@ -288,6 +289,8 @@ class MainActivity : ComponentActivity() {
                             playing = playing,
                             onGains = { a, b -> model.setGains(a, b) },
                             onMasterGain = { g -> model.setMasterGain(g) },
+                            fx = fx,
+                            onFx = { chosen -> model.setFx(chosen) },
                             view = display.mixer,
                         )
 

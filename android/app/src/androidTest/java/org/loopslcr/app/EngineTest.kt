@@ -125,6 +125,65 @@ class EngineTest {
     }
 
     @Test
+    fun the_insert_reaches_the_audio_through_the_kotlin_that_describes_it() {
+        // Six numbers cross the boundary in one call, and two of them are enum
+        // ordinals. Swap the resonance for the route and nothing fails to
+        // compile — it just filters at the wrong setting for ever. So the test
+        // asks the panel, in Kotlin, for something whose effect on the samples
+        // is not arguable, and listens to what comes back.
+        val handle = org.loopslcr.Native.previewCreate(wav, name, "{}")
+        assertTrue(handle != 0L)
+        try {
+            val block = ByteBuffer.allocateDirect(2048 * 2 * 4).order(ByteOrder.nativeOrder())
+
+            fun loudest(): Float {
+                org.loopslcr.Native.previewRead(handle, block, 2048)
+                val floats = block.asFloatBuffer()
+                var peak = 0f
+                for (i in 0 until 2048 * 2) peak = maxOf(peak, kotlin.math.abs(floats.get(i)))
+                return peak
+            }
+
+            val plain = loudest()
+            assertTrue("the preview produced silence", plain > 0.01f)
+
+            // A highpass at the top of the range, on a loop that has nothing up
+            // there. What is left should be very little.
+            val filtered = Fx(mode = FxMode.HighPass, cutoffHz = 18_000f)
+            org.loopslcr.Native.previewSetFx(
+                handle,
+                filtered.mode.ordinal,
+                filtered.cutoffHz,
+                filtered.resonance,
+                filtered.route.ordinal,
+                filtered.drive,
+                filtered.output,
+            )
+            loudest()
+            val quiet = loudest()
+            assertTrue("$plain became $quiet with a highpass on it", quiet < plain * 0.3f)
+
+            // And taking it out gives the sound back through the same handle,
+            // which is what "off" has to mean for a control you can reach for
+            // while the loop is running.
+            val wire = Fx()
+            org.loopslcr.Native.previewSetFx(
+                handle,
+                wire.mode.ordinal,
+                wire.cutoffHz,
+                wire.resonance,
+                wire.route.ordinal,
+                wire.drive,
+                wire.output,
+            )
+            val again = loudest()
+            assertTrue("$plain came back as $again", again > plain * 0.8f)
+        } finally {
+            org.loopslcr.Native.previewDestroy(handle)
+        }
+    }
+
+    @Test
     fun the_preview_plays_the_whole_loop_and_comes_back_round() {
         // Reading exactly twice the loop length must land back where it started.
         // A preview that drifts by a sample per pass is a preview that lies

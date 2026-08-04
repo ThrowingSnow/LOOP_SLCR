@@ -95,6 +95,8 @@ fun MixerScreen(
     playing: Boolean,
     onGains: (Float, Float) -> Unit,
     onMasterGain: (Float) -> Unit,
+    fx: Fx = Fx(),
+    onFx: (Fx) -> Unit = {},
     view: MixerView = MixerView.Desk,
 ) {
     // Polled like the play head, and for the same reason: the audio thread
@@ -215,10 +217,12 @@ fun MixerScreen(
             fontSize = 11.sp,
         )
 
+        Panel { FxPanel(fx = fx, onFx = onFx) }
+
         Spacer(Modifier.height(8.dp))
         Text("COMING HERE", color = Palette.dim, fontSize = 11.sp)
         Text(
-            "Delay and reverb, on their own page. Named rather than shown, for " +
+            "Delay and reverb, in the same insert. Named rather than shown, for " +
                 "the same reason the settings tab is mostly empty: a control " +
                 "that does nothing is worse than one that is not there yet.",
             color = Palette.dim,

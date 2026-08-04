@@ -184,6 +184,7 @@ class CutterViewModel : ViewModel() {
                 // unity — so a level the user set would silently jump back.
                 player.setGains(_gains.value.first, _gains.value.second)
                 player.setMasterGain(_masterGain.value)
+                player.setFx(_fx.value)
             } else {
                 _problem.value = problem
             }
@@ -394,6 +395,21 @@ class CutterViewModel : ViewModel() {
         player.setMasterGain(gain)
     }
 
+    /**
+     * The insert on the sum, between the channel faders and the master.
+     *
+     * Held here rather than in [Settings] because it is not part of a cut: it
+     * changes what you hear, not what the file is. Pushed whole, so the audio
+     * thread never sees half a panel.
+     */
+    private val _fx = MutableStateFlow(Fx())
+    val fx: StateFlow<Fx> = _fx.asStateFlow()
+
+    fun setFx(fx: Fx) {
+        _fx.value = fx
+        player.setFx(fx)
+    }
+
     /** The three meters from one block: loop 1, loop 2, and what left. */
     fun levels(): Triple<Float, Float, Float> = player.peaks()
 
@@ -555,6 +571,7 @@ class CutterViewModel : ViewModel() {
                     pushPartner()
                     player.setGains(_gains.value.first, _gains.value.second)
                     player.setMasterGain(_masterGain.value)
+                    player.setFx(_fx.value)
                 } else {
                     _playing.value = false
                     playingSettings = null

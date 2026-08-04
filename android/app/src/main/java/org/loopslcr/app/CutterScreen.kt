@@ -1425,7 +1425,7 @@ private fun Toggle(label: String, on: Boolean, onToggle: (Boolean) -> Unit) {
 }
 
 @Composable
-private fun Chip(
+internal fun Chip(
     label: String,
     selected: Boolean,
     modifier: Modifier = Modifier,

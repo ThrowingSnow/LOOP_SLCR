@@ -247,6 +247,28 @@ class PreviewPlayer {
         }.getOrNull()
     }
 
+    /**
+     * Sets the insert on the sum. Lock-free.
+     *
+     * The whole panel in one crossing, because the audio thread must never run
+     * a block with half a change in it.
+     */
+    fun setFx(fx: Fx) {
+        if (handle != 0L) {
+            runCatching {
+                Native.previewSetFx(
+                    handle,
+                    fx.mode.ordinal,
+                    fx.cutoffHz,
+                    fx.resonance,
+                    fx.route.ordinal,
+                    fx.drive,
+                    fx.output,
+                )
+            }
+        }
+    }
+
     /** Sets the trim on the sum, after both loop gains. Lock-free. */
     fun setMasterGain(gain: Float) {
         if (handle != 0L) {
