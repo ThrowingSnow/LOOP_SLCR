@@ -41,8 +41,11 @@ fun SettingsScreen(engineVersion: String, build: String) {
     ) {
         Text("LOOP_SLCR", color = Palette.text, fontSize = 18.sp)
 
+        // The version code as well as the name. It counts commits, so it rises
+        // every build — which is what makes "did the install actually take?" a
+        // question with an answer rather than a guess.
         Text(
-            "build    $build\nengine   $engineVersion",
+            "build    $build (${BuildConfig.VERSION_CODE})\nengine   $engineVersion",
             color = Palette.dim,
             fontSize = 12.sp,
             fontFamily = FontFamily.Monospace,

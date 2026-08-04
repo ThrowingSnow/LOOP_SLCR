@@ -68,7 +68,16 @@ android {
         applicationId = "org.loopslcr.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
+        // How many commits deep this build is.
+        //
+        // It was 1 forever, which meant every build looked to Android like the
+        // same version as the one already installed. An installer is entitled
+        // to treat that as nothing to do, and "I installed it and nothing
+        // changed" is then indistinguishable from a stale APK — which is a
+        // question that has already cost this project two rounds.
+        versionCode = providers.exec {
+            commandLine("git", "rev-list", "--count", "HEAD")
+        }.standardOutput.asText.get().trim().toIntOrNull() ?: 1
         // The commit this APK was built from, shown in the app.
         //
         // Not decoration. A release build once reported BUILD SUCCESSFUL and

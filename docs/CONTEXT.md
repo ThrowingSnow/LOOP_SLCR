@@ -1490,3 +1490,25 @@ Ein `cp` aus einem älteren Backup und ein `git checkout` haben je einen frisch
 geschriebenen Test wieder entfernt — beide Male, um einen Gegenbeweis
 zurückzunehmen. Die Regel daraus: **vor dem Gegenbeweis committen**, dann ist
 Zurücksetzen billig und trifft nur das, was es treffen soll.
+
+### 26b. Und einmal das Falsche ausgeliefert
+
+Gemeldet als „wo ist der LFO? ist es überhaupt die richtige Version?" — und der
+Stempel gab die Antwort sofort: `0.1.0+3f17f5f`, ein Commit vor dem LFO.
+
+Diesmal lag es nicht am Build, sondern an der **Reihenfolge**: erst
+`assembleRelease`, dann geprüft, dann `connectedAndroidTest -PtestRelease` —
+was dieselbe `app-release.apk` überschreibt, weil `testBuildType` dort auf
+`release` steht und zusätzliche R8-Regeln alles behalten. Erst danach wurde
+kopiert. Ausgeliefert wurde also der „unter Test"-Build: 8 MB statt 2,4, mit
+17,9 MB dex.
+
+Zwei Regeln daraus:
+
+- **Prüfen, was tatsächlich rausgeht** — nicht den Pfad, aus dem es einmal kam.
+  Aufgefallen ist es nur, weil die Dateigröße nicht passte.
+- **`versionCode` zählt jetzt die Commits.** Er stand für immer auf 1, also sah
+  jeder Build für Android wie die schon installierte Version aus. Ein Installer
+  darf das als „nichts zu tun" behandeln, und dann ist „installiert, nichts
+  geändert" nicht mehr von einem alten APK zu unterscheiden. Er steht neben dem
+  Namen im Zahnrad-Reiter.
