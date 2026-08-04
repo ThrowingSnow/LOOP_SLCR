@@ -20,6 +20,7 @@ import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -583,6 +584,99 @@ class CutterScreenTest {
         compose.onNodeWithTag("fxCutoff").assertExists()
         compose.onNodeWithTag("fxDrive").assertExists()
         compose.onNodeWithTag("fxOutput").assertExists()
+    }
+
+    @Test
+    fun the_echo_is_asked_for_in_note_values_and_delivered_as_a_fraction() {
+        // A division is per *bar*; the preview counts a fraction of the *loop*.
+        // Getting that conversion backwards would put an eighth-note delay eight
+        // times too long on a thirty-two-bar loop and nobody would notice until
+        // they played one.
+        val eighth = Fx(delayMix = 0.5f, delayDivision = DelayDivision.Eighth)
+        assertEquals(1f / 8f / 4f, eighth.syncFraction(4), 1e-6f)
+        assertEquals(1f / 8f / 32f, eighth.syncFraction(32), 1e-6f)
+        // A dotted eighth is three sixteenths, which is the whole reason it is
+        // on the list.
+        assertEquals(
+            3f * eighth.copy(delayDivision = DelayDivision.Sixteenth).syncFraction(4),
+            eighth.copy(delayDivision = DelayDivision.DottedEighth).syncFraction(4),
+            1e-6f,
+        )
+        // A whole bar of a four-bar loop is a quarter of it.
+        assertEquals(0.25f, eighth.copy(delayDivision = DelayDivision.Bar).syncFraction(4), 1e-6f)
+
+        // Free is free: no fraction at all, and the milliseconds become samples.
+        val free = eighth.copy(delaySynced = false, delayMs = 500f)
+        assertEquals(0f, free.syncFraction(4), 1e-6f)
+        assertEquals(24_000f, free.freeSamples(48_000), 1f)
+        // And with no plan there is no bar count to divide by, so nothing is
+        // claimed rather than four being guessed.
+        assertEquals(0f, eighth.syncFraction(0), 1e-6f)
+    }
+
+    @Test
+    fun freeze_is_on_even_at_no_mix_and_the_panel_says_so() {
+        // A held line you cannot hear is still a held line. If the bypass check
+        // let it go because the mix was down, the thing would be lost in the
+        // moment you reached for the knob to hear it.
+        assertTrue(Fx().isWire)
+        assertFalse("a freeze at no mix read as bypassed", Fx(freeze = true).isWire)
+        assertFalse(Fx(delayMix = 0.3f).isWire)
+        assertFalse(Fx(reverbMix = 0.3f).isWire)
+    }
+
+    @Test
+    fun the_whole_insert_is_reachable_and_the_time_control_swaps_over() {
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+        val file = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks)
+        var fx by mutableStateOf(Fx())
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                MixerScreen(
+                    first = file,
+                    second = null,
+                    gains = 1f to 1f,
+                    masterGain = 1f,
+                    levels = { Triple(0f, 0f, 0f) },
+                    playing = false,
+                    onGains = { _, _ -> },
+                    onMasterGain = { },
+                    fx = fx,
+                    onFx = { fx = it },
+                )
+            }
+        }
+
+        // Synced by default, so the note values are what is offered.
+        compose.onNodeWithTag("fxDivQuarter").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(DelayDivision.Quarter, fx.delayDivision) }
+
+        // FREE puts a millisecond knob where the note values were, rather than
+        // showing both and leaving which one is in charge to be guessed.
+        compose.onNodeWithTag("fxDelayFree").performScrollTo().performClick()
+        compose.runOnIdle { assertFalse("SYNC stayed on", fx.delaySynced) }
+        compose.onNodeWithTag("fxDelayMs").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithTag("fxDivQuarter").assertCountEquals(0)
+
+        compose.onNodeWithTag("fxDelaySync").performScrollTo().performClick()
+        compose.runOnIdle { assertTrue("FREE stayed on", fx.delaySynced) }
+        compose.onNodeWithTag("fxDivQuarter").performScrollTo().assertIsDisplayed()
+
+        // Ping-pong and freeze are switches, and the panel notices freeze even
+        // with every mix at nothing.
+        compose.onNodeWithTag("fxPingPong").performScrollTo().performClick()
+        compose.runOnIdle { assertTrue("ping-pong did not latch", fx.pingPong) }
+        compose.onNodeWithTag("fxFreeze").performScrollTo().performClick()
+        compose.runOnIdle { assertTrue("freeze did not latch", fx.freeze) }
+        compose.onNodeWithTag("fxState").assertTextEquals("in the signal path")
+
+        // And the room is all there.
+        compose.onNodeWithTag("fxReverbMix").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("fxReverbSize").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("fxReverbPre").performScrollTo().assertIsDisplayed()
     }
 
     @Test

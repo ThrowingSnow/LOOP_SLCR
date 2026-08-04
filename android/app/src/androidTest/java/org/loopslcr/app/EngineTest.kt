@@ -126,11 +126,11 @@ class EngineTest {
 
     @Test
     fun the_insert_reaches_the_audio_through_the_kotlin_that_describes_it() {
-        // Six numbers cross the boundary in one call, and two of them are enum
-        // ordinals. Swap the resonance for the route and nothing fails to
+        // Eighteen numbers cross the boundary in one call, and two of them are
+        // enum ordinals. Swap the resonance for the route and nothing fails to
         // compile — it just filters at the wrong setting for ever. So the test
-        // asks the panel, in Kotlin, for something whose effect on the samples
-        // is not arguable, and listens to what comes back.
+        // asks the panel, in Kotlin, for things whose effect on the samples is
+        // not arguable, and listens to what comes back.
         val handle = org.loopslcr.Native.previewCreate(wav, name, "{}")
         assertTrue(handle != 0L)
         try {
@@ -144,40 +144,57 @@ class EngineTest {
                 return peak
             }
 
+            fun push(fx: Fx, bars: Long = 4L) {
+                org.loopslcr.Native.previewSetFx(
+                    handle,
+                    fx.mode.ordinal,
+                    fx.cutoffHz,
+                    fx.resonance,
+                    fx.route.ordinal,
+                    fx.drive,
+                    fx.output,
+                    fx.delayMix,
+                    fx.freeSamples(RATE),
+                    fx.syncFraction(bars),
+                    fx.delayFeedback,
+                    fx.delayDamping,
+                    fx.pingPong,
+                    fx.freeze,
+                    fx.reverbMix,
+                    fx.reverbSize,
+                    fx.reverbDamping,
+                    fx.reverbPredelayMs,
+                )
+            }
+
             val plain = loudest()
             assertTrue("the preview produced silence", plain > 0.01f)
 
             // A highpass at the top of the range, on a loop that has nothing up
             // there. What is left should be very little.
-            val filtered = Fx(mode = FxMode.HighPass, cutoffHz = 18_000f)
-            org.loopslcr.Native.previewSetFx(
-                handle,
-                filtered.mode.ordinal,
-                filtered.cutoffHz,
-                filtered.resonance,
-                filtered.route.ordinal,
-                filtered.drive,
-                filtered.output,
-            )
+            push(Fx(mode = FxMode.HighPass, cutoffHz = 18_000f))
             loudest()
             val quiet = loudest()
             assertTrue("$plain became $quiet with a highpass on it", quiet < plain * 0.3f)
 
-            // And taking it out gives the sound back through the same handle,
-            // which is what "off" has to mean for a control you can reach for
-            // while the loop is running.
-            val wire = Fx()
-            org.loopslcr.Native.previewSetFx(
-                handle,
-                wire.mode.ordinal,
-                wire.cutoffHz,
-                wire.resonance,
-                wire.route.ordinal,
-                wire.drive,
-                wire.output,
-            )
+            // Taking it out gives the sound back through the same handle, which
+            // is what "off" has to mean for a control you reach for while the
+            // loop is running.
+            push(Fx())
             val again = loudest()
             assertTrue("$plain came back as $again", again > plain * 0.8f)
+
+            // And the far end of the panel arrives too: a room at full mix puts
+            // something on top of the loop that was not there before.
+            push(Fx(reverbMix = 1f, reverbSize = 1f, reverbPredelayMs = 0f))
+            repeat(8) { loudest() }
+            val roomy = loudest()
+            assertTrue("a full room changed nothing: $again then $roomy", roomy > again * 1.05f)
+
+            push(Fx())
+            repeat(2) { loudest() }
+            val dry = loudest()
+            assertTrue("the room did not let go: $dry against $again", dry < roomy)
         } finally {
             org.loopslcr.Native.previewDestroy(handle)
         }

@@ -1,6 +1,12 @@
 package org.loopslcr.app
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -38,12 +44,29 @@ import androidx.compose.ui.unit.sp
  *
  * Both are things people do on purpose, so neither is wired in.
  *
+ * # Why the delay and the room come last
+ *
+ * The filter and the drive are what the sound *is*; the delay and the room are
+ * where it *is*. Putting the space first would have the drive flattening the
+ * tail as well as the source, which is the sound of a broken send rather than
+ * anything anyone reaches for.
+ *
+ * # Why the echo is given in note values
+ *
+ * Because that is what it is for. The division is per *bar*, so an eighth means
+ * the same length of time in a four-bar loop and a thirty-two-bar one, and the
+ * preview turns it into samples against the speed the loop is actually playing
+ * at — pitch it up and the echo shortens with the bar instead of walking out of
+ * the grid. FREE is there for the times when the point is that it does not line
+ * up.
+ *
  * # Why nothing here is exported
  *
  * The same reason the varispeed and the motion are not: the cut is what the file
  * is, and the insert is what your hands were doing to it. A filter sweep baked
  * into a WAV is not a loop any more.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FxPanel(fx: Fx, onFx: (Fx) -> Unit, modifier: Modifier = Modifier) {
     Column(
@@ -132,12 +155,145 @@ fun FxPanel(fx: Fx, onFx: (Fx) -> Unit, modifier: Modifier = Modifier) {
             tag = "fxOutput",
         ) { onFx(fx.copy(output = fromTravel(it))) }
 
+        Divider("DELAY")
+
+        Knob(
+            label = "MIX",
+            position = fx.delayMix,
+            reading = percent(fx.delayMix),
+            tag = "fxDelayMix",
+        ) { onFx(fx.copy(delayMix = it)) }
+
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "TIME",
+                color = Palette.text,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.width(62.dp),
+            )
+            Chip("SYNC", fx.delaySynced, Modifier.testTag("fxDelaySync")) {
+                onFx(fx.copy(delaySynced = true))
+            }
+            Chip("FREE", !fx.delaySynced, Modifier.testTag("fxDelayFree")) {
+                onFx(fx.copy(delaySynced = false))
+            }
+        }
+
+        if (fx.delaySynced) {
+            // Wrapped rather than scrolled: seven note values on one line would
+            // be seven targets too narrow to hit with a thumb, and this is a
+            // control people reach for while something is playing.
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                DelayDivision.entries.forEach { division ->
+                    Chip(
+                        label = division.label,
+                        selected = fx.delayDivision == division,
+                        modifier = Modifier.testTag("fxDiv${division.name}"),
+                    ) { onFx(fx.copy(delayDivision = division)) }
+                }
+            }
+        } else {
+            Knob(
+                label = "MS",
+                position = delayTravel(fx.delayMs),
+                reading = millis(fx.delayMs),
+                tag = "fxDelayMs",
+            ) { onFx(fx.copy(delayMs = delayMsFrom(it))) }
+        }
+
+        Knob(
+            label = "FEEDBACK",
+            position = fx.delayFeedback,
+            reading = percent(fx.delayFeedback),
+            tag = "fxDelayFeedback",
+        ) { onFx(fx.copy(delayFeedback = it)) }
+
+        Knob(
+            label = "DAMP",
+            position = fx.delayDamping,
+            reading = percent(fx.delayDamping),
+            tag = "fxDelayDamp",
+        ) { onFx(fx.copy(delayDamping = it)) }
+
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Spacer(Modifier.width(56.dp))
+            Chip("PING-PONG", fx.pingPong, Modifier.testTag("fxPingPong")) {
+                onFx(fx.copy(pingPong = !fx.pingPong))
+            }
+            // Freeze holds the line and stops listening. Feedback cannot be
+            // pushed to unity, so this is the only honest way to ask for
+            // forever — and it says so on the switch rather than hiding at the
+            // top of a knob.
+            Chip("FREEZE", fx.freeze, Modifier.testTag("fxFreeze")) {
+                onFx(fx.copy(freeze = !fx.freeze))
+            }
+        }
+
+        Divider("ROOM")
+
+        Knob(
+            label = "MIX",
+            position = fx.reverbMix,
+            reading = percent(fx.reverbMix),
+            tag = "fxReverbMix",
+        ) { onFx(fx.copy(reverbMix = it)) }
+
+        Knob(
+            label = "SIZE",
+            position = fx.reverbSize,
+            reading = percent(fx.reverbSize),
+            tag = "fxReverbSize",
+            enabled = fx.reverbMix > 0f,
+        ) { onFx(fx.copy(reverbSize = it)) }
+
+        Knob(
+            label = "DAMP",
+            position = fx.reverbDamping,
+            reading = percent(fx.reverbDamping),
+            tag = "fxReverbDamp",
+            enabled = fx.reverbMix > 0f,
+        ) { onFx(fx.copy(reverbDamping = it)) }
+
+        // A room that answers instantly buries the transient it is answering.
+        // A few tens of milliseconds leaves the drum hit in the clear and puts
+        // the room behind it.
+        Knob(
+            label = "PRE-DLY",
+            position = fx.reverbPredelayMs / FX_MAX_PREDELAY_MS,
+            reading = millis(fx.reverbPredelayMs),
+            tag = "fxReverbPre",
+            enabled = fx.reverbMix > 0f,
+        ) { onFx(fx.copy(reverbPredelayMs = it * FX_MAX_PREDELAY_MS)) }
+
         Text(
             "The insert sits after both channel faders and before the master, " +
-                "so the master meter is what says whether it got too loud.",
+                "so the master meter is what says whether it got too loud. " +
+                "None of it is exported — the cut is what the file is.",
             color = Palette.dim,
             fontSize = 11.sp,
         )
+    }
+}
+
+/** A named rule, so the three boxes read as three boxes. */
+@Composable
+private fun Divider(label: String) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = Palette.dim, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Box(Modifier.weight(1f).height(1.dp).background(Palette.trackIdle))
     }
 }
 

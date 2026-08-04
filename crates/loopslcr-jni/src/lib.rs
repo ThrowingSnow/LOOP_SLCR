@@ -457,14 +457,20 @@ pub extern "system" fn Java_org_loopslcr_Native_previewSetMasterGain<'a>(
     })
 }
 
-/// `previewSetFx(long handle, int mode, float cutoff, float resonance,
-/// int route, float drive, float output)`.
+/// `previewSetFx(long handle, ...)` — the whole insert, in one call.
 ///
-/// The insert on the sum: a filter and an overdrive, in whichever order `route`
-/// names. `mode` is 0 off, 1 lowpass, 2 highpass, 3 bandpass; `route` is 0
-/// filter first, 1 drive first. Everything at once rather than a call per knob,
-/// so the audio thread never runs a block with half a change in it. Lock-free;
-/// safe from any thread.
+/// A filter (`mode` 0 off, 1 lowpass, 2 highpass, 3 bandpass), an overdrive, a
+/// switch for which of the two hears the other (`route` 0 filter first, 1 drive
+/// first), a delay and a room.
+///
+/// `delaySamples` is a free time in output samples. `delaySync`, if above zero,
+/// is a fraction of the loop and outranks it — resolved against the loop's own
+/// length and the speed it is playing at, which is what makes a synced echo
+/// follow the varispeed.
+///
+/// Everything in one call rather than a call per knob, and published as one
+/// thing: with a `freeze` switch in the panel, half a change is a state nobody
+/// asked for. Lock-free; safe from any thread, but from one thread only.
 ///
 /// # Safety
 /// Called by the JVM with valid arguments; not to be called from Rust.
@@ -480,16 +486,38 @@ pub extern "system" fn Java_org_loopslcr_Native_previewSetFx<'a>(
     route: jint,
     drive: jfloat,
     output: jfloat,
+    delay_mix: jfloat,
+    delay_samples: jfloat,
+    delay_sync: jfloat,
+    delay_feedback: jfloat,
+    delay_damping: jfloat,
+    ping_pong: jboolean,
+    freeze: jboolean,
+    reverb_mix: jfloat,
+    reverb_size: jfloat,
+    reverb_damping: jfloat,
+    reverb_predelay_ms: jfloat,
 ) {
     guard(&mut env, (), |_| {
-        handle(handle_value)?.set_fx(
-            mode.max(0) as u32,
+        handle(handle_value)?.set_fx(preview::FxPanel {
+            mode: mode.max(0) as u32,
             cutoff,
             resonance,
-            route.max(0) as u32,
+            route: route.max(0) as u32,
             drive,
             output,
-        );
+            delay_mix,
+            delay_samples,
+            delay_sync,
+            delay_feedback,
+            delay_damping,
+            ping_pong: ping_pong != 0,
+            freeze: freeze != 0,
+            reverb_mix,
+            reverb_size,
+            reverb_damping,
+            reverb_predelay_ms,
+        });
         Ok(())
     })
 }

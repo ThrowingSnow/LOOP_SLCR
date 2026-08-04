@@ -184,7 +184,7 @@ class CutterViewModel : ViewModel() {
                 // unity — so a level the user set would silently jump back.
                 player.setGains(_gains.value.first, _gains.value.second)
                 player.setMasterGain(_masterGain.value)
-                player.setFx(_fx.value)
+                pushFx()
             } else {
                 _problem.value = problem
             }
@@ -407,7 +407,23 @@ class CutterViewModel : ViewModel() {
 
     fun setFx(fx: Fx) {
         _fx.value = fx
-        player.setFx(fx)
+        pushFx()
+    }
+
+    /**
+     * Hands the panel down, with the two numbers only this layer can work out.
+     *
+     * A division is per bar and the preview counts samples, so somebody has to
+     * know the loop's bar count and its sample rate. That somebody is here: the
+     * panel is a musical statement, the delay is an arithmetic one, and this is
+     * where the two meet. Called again whenever the plan changes, because a
+     * different bar count is a different length for the same eighth note.
+     */
+    private fun pushFx() {
+        val fx = _fx.value
+        val bars = _plan.value?.bars ?: 0L
+        val rate = _loaded.value?.analysis?.sampleRate ?: 48_000
+        player.setFx(fx, fx.syncFraction(bars), fx.freeSamples(rate))
     }
 
     /** The three meters from one block: loop 1, loop 2, and what left. */
@@ -571,7 +587,7 @@ class CutterViewModel : ViewModel() {
                     pushPartner()
                     player.setGains(_gains.value.first, _gains.value.second)
                     player.setMasterGain(_masterGain.value)
-                    player.setFx(_fx.value)
+                    pushFx()
                 } else {
                     _playing.value = false
                     playingSettings = null
@@ -687,6 +703,9 @@ class CutterViewModel : ViewModel() {
                 _problem.value = null
                 // The reference loop's tempo may have just moved under it.
                 applyMaster()
+                // And a different bar count is a different length for the same
+                // eighth note, so a synced echo has to be told.
+                pushFx()
                 followPreview(plan)
             } catch (e: CancellationException) {
                 // A newer change cancelled this one. That is the debounce

@@ -32,10 +32,12 @@
 //! handle *is* checked, because that is the one bad value a caller can produce
 //! by ordinary mistake rather than by ignoring the contract.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 
+use loopslcr_core::ops::delay::DelaySettings;
 use loopslcr_core::ops::fx::{FxSettings, Mode as FxMode, Route};
+use loopslcr_core::ops::reverb::ReverbSettings;
 use loopslcr_core::ops::preview::{Motion, Pair, Preview, Shape, DEFAULT_GLIDE_MS};
 use loopslcr_core::pipeline;
 use loopslcr_core::wav::Wav;
@@ -59,16 +61,12 @@ pub struct Handle {
     pair: AtomicU64,
     /// The two level trims, as `f32` bits side by side. Written by the UI.
     gains: AtomicU64,
-    /// The insert, in two words — see [`pack_filter`] and [`pack_drive`].
+    /// The insert — a filter, a drive, a delay and a room, seventeen knobs.
     ///
-    /// Two rather than one because six fields do not fit in sixty-four bits, and
-    /// two rather than the mutex because the mutex is held by the audio thread
-    /// for the length of a block. Unlike the motion, a block that saw the new
-    /// cutoff with the old resonance is harmless: every field here is a
-    /// continuous knob whose values are each independently valid, so a torn read
-    /// is a position the hand passed through, not a setting nobody chose.
-    fx_filter: AtomicU64,
-    fx_drive: AtomicU64,
+    /// Too many to pack into words the way the motion is packed, and not
+    /// something the mutex can carry either: the mutex is held by the audio
+    /// thread for the length of a block. So it is a seqlock. See [`FxMailbox`].
+    fx: FxMailbox,
     /// The trim on the sum, as `f32` bits. Written by the UI.
     ///
     /// Its own word rather than a third field beside the two loop gains, which
@@ -108,8 +106,7 @@ impl Handle {
             motion: AtomicU64::new(0),
             pair: AtomicU64::new(0),
             gains: AtomicU64::new(pack_two(1.0, 1.0)),
-            fx_filter: AtomicU64::new(pack_filter(0, 1_000.0, 0.0, 0)),
-            fx_drive: AtomicU64::new(pack_two(0.0, 1.0)),
+            fx: FxMailbox::new(),
             master_gain: AtomicU64::new(u64::from(1.0f32.to_bits())),
             peaks: AtomicU64::new(0),
             peak_master: AtomicU64::new(0),
@@ -157,17 +154,18 @@ impl Handle {
             .store(pack_two(first, second), Ordering::Relaxed);
     }
 
-    /// Sets the insert. Callable from any thread.
+    /// Sets the insert. Callable from any thread — but from one thread only.
     ///
     /// `mode` and `route` are numbers rather than enums because they come from
     /// Java, where they are ordinals; an unknown one becomes the harmless
     /// choice rather than an error, for the same reason an unknown motion shape
     /// does — the audio thread is the last place to start reporting faults.
-    pub fn set_fx(&self, mode: u32, cutoff: f32, resonance: f32, route: u32, drive: f32, output: f32) {
-        self.fx_filter
-            .store(pack_filter(mode, cutoff, resonance, route), Ordering::Relaxed);
-        self.fx_drive
-            .store(pack_two(drive, output), Ordering::Relaxed);
+    ///
+    /// The whole panel goes in one call, and lands as one publication. See
+    /// [`FxMailbox`] for why that had to stop being a matter of packing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_fx(&self, panel: FxPanel) {
+        self.fx.publish(&panel);
     }
 
     /// Sets the trim on the sum, linear. Callable from any thread.
@@ -279,10 +277,12 @@ impl Handle {
         preview.set_pair(unpack_pair(self.pair.load(Ordering::Relaxed)));
         let (first, second) = unpack_two(self.gains.load(Ordering::Relaxed));
         preview.set_gains(f64::from(first), f64::from(second));
-        preview.set_fx(unpack_fx(
-            self.fx_filter.load(Ordering::Relaxed),
-            self.fx_drive.load(Ordering::Relaxed),
-        ));
+        // A failed read means the UI was mid-write when the audio thread looked,
+        // twice running. Nothing is applied and the preview keeps the panel it
+        // already had — one block late is not a sound, and a torn panel is.
+        if let Some((settings, sync)) = self.fx.read() {
+            preview.set_fx(settings, sync);
+        }
         preview.set_master_gain(f64::from(f32::from_bits(
             self.master_gain.load(Ordering::Relaxed) as u32,
         )));
@@ -361,43 +361,188 @@ fn pack_motion(on: bool, steps: u32, depth: u32, every: u32, shape: u32) -> u64 
         | u64::from(every) << 36
 }
 
-/// The filter half of the insert: cutoff, resonance, mode, route.
+/// The insert's panel, as it arrives from Java.
 ///
-/// The cutoff keeps all thirty-two of its bits because it is the one a hand
-/// sweeps and a coarse step in it is audible as a staircase. The resonance is
-/// quantised to a sixteenth-bit of its range, which is four decimal places on a
-/// knob that has two.
-fn pack_filter(mode: u32, cutoff: f32, resonance: f32, route: u32) -> u64 {
-    let resonance = if resonance.is_nan() { 0.0 } else { resonance };
-    let quantised = (resonance.clamp(0.0, 1.0) * f32::from(u16::MAX)) as u16;
-    u64::from(cutoff.to_bits()) << 32
-        | u64::from(quantised) << 16
-        // Out of range means off, and means it here rather than three layers
-        // down. Masking instead would turn a number nobody sent into a mode
-        // somebody appears to have chosen.
-        | u64::from(if mode > 3 { 0 } else { mode }) << 8
-        | u64::from(if route > 1 { 0 } else { route })
+/// A struct rather than eighteen arguments carried about: it crosses the JNI
+/// boundary as eighteen arguments once, at the edge, and is one thing everywhere
+/// after that.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct FxPanel {
+    pub mode: u32,
+    pub cutoff: f32,
+    pub resonance: f32,
+    pub route: u32,
+    pub drive: f32,
+    pub output: f32,
+    pub delay_mix: f32,
+    pub delay_samples: f32,
+    /// Above zero, a fraction of the loop; the preview turns it into samples.
+    pub delay_sync: f32,
+    pub delay_feedback: f32,
+    pub delay_damping: f32,
+    pub ping_pong: bool,
+    pub freeze: bool,
+    pub reverb_mix: f32,
+    pub reverb_size: f32,
+    pub reverb_damping: f32,
+    pub reverb_predelay_ms: f32,
 }
 
-fn unpack_fx(filter: u64, drive: u64) -> FxSettings {
-    let (drive, output) = unpack_two(drive);
-    FxSettings {
-        mode: match filter >> 8 & 0xFF {
+/// How many `u32` cells one panel takes.
+const FX_CELLS: usize = 16;
+
+/// The insert, published whole to the audio thread without a lock.
+///
+/// # Why this is not more packing
+///
+/// The motion fits in one word, so a single store publishes it and there is
+/// nothing to tear. The filter and the drive fit in two, and tearing between
+/// them was arguably harmless — every field was a continuous knob whose values
+/// are each independently valid, so half a change was a position the hand had
+/// passed through.
+///
+/// That argument does not survive a delay. `freeze` and `ping_pong` are
+/// switches, not knobs: a block that read the new freeze beside the old feedback
+/// is a state nobody asked for, and with seventeen fields the odds stop being
+/// theoretical.
+///
+/// # Why a seqlock
+///
+/// Because the reader is the audio thread and must never wait for the writer,
+/// and the writer is a finger on a slider and can afford to do all the work. The
+/// generation counter is odd while a write is in progress; a reader that sees an
+/// odd count, or a different count either side of its read, knows it saw a
+/// half-written panel and says so. There is exactly one writer — the UI thread —
+/// which is what makes the counter enough on its own.
+///
+/// A reader that fails twice gives up rather than spinning. The caller then
+/// applies nothing, and the preview keeps the panel it already had: one block
+/// late is not a sound, and a torn panel is.
+pub struct FxMailbox {
+    generation: AtomicU64,
+    cells: [AtomicU32; FX_CELLS],
+}
+
+impl FxMailbox {
+    fn new() -> Self {
+        let mailbox = FxMailbox {
+            generation: AtomicU64::new(0),
+            cells: std::array::from_fn(|_| AtomicU32::new(0)),
+        };
+        mailbox.publish(&FxPanel {
+            cutoff: 1_000.0,
+            output: 1.0,
+            ..FxPanel::default()
+        });
+        mailbox
+    }
+
+    /// Writes a whole panel. **One writer only.**
+    fn publish(&self, panel: &FxPanel) {
+        let started = self.generation.load(Ordering::Relaxed);
+        // Odd for the duration, so a reader can tell a write is under way. The
+        // release pairs with the reader's acquire: the cells must not be seen
+        // before the odd count that warns about them.
+        self.generation.store(started + 1, Ordering::Release);
+        let values = [
+            clean(panel.mode),
+            panel.cutoff.to_bits(),
+            panel.resonance.to_bits(),
+            route(panel.route),
+            panel.drive.to_bits(),
+            panel.output.to_bits(),
+            panel.delay_mix.to_bits(),
+            panel.delay_samples.to_bits(),
+            panel.delay_sync.to_bits(),
+            panel.delay_feedback.to_bits(),
+            panel.delay_damping.to_bits(),
+            u32::from(panel.ping_pong) | u32::from(panel.freeze) << 1,
+            panel.reverb_mix.to_bits(),
+            panel.reverb_size.to_bits(),
+            panel.reverb_damping.to_bits(),
+            panel.reverb_predelay_ms.to_bits(),
+        ];
+        for (cell, value) in self.cells.iter().zip(values) {
+            cell.store(value, Ordering::Relaxed);
+        }
+        self.generation.store(started + 2, Ordering::Release);
+    }
+
+    /// Reads a whole panel, or nothing if the writer was in the middle of one.
+    ///
+    /// Returns the settings and the sync fraction separately, because the
+    /// fraction is not something the effect can resolve — see
+    /// [`Preview::set_fx`](loopslcr_core::ops::preview::Preview::set_fx).
+    fn read(&self) -> Option<(FxSettings, f64)> {
+        for _ in 0..2 {
+            let before = self.generation.load(Ordering::Acquire);
+            if before % 2 == 1 {
+                continue;
+            }
+            let cells: [u32; FX_CELLS] =
+                std::array::from_fn(|i| self.cells[i].load(Ordering::Relaxed));
+            if self.generation.load(Ordering::Acquire) == before {
+                return Some(unpack_fx(&cells));
+            }
+        }
+        None
+    }
+}
+
+/// A mode number that names nothing becomes off, and means it here rather than
+/// three layers down. Masking instead would turn a number nobody sent into a
+/// mode somebody appears to have chosen.
+fn clean(mode: u32) -> u32 {
+    if mode > 3 {
+        0
+    } else {
+        mode
+    }
+}
+
+fn route(route: u32) -> u32 {
+    if route > 1 {
+        0
+    } else {
+        route
+    }
+}
+
+fn unpack_fx(cells: &[u32; FX_CELLS]) -> (FxSettings, f64) {
+    let number = |index: usize| f64::from(f32::from_bits(cells[index]));
+    let flags = cells[11];
+    let settings = FxSettings {
+        mode: match cells[0] {
             1 => FxMode::LowPass,
             2 => FxMode::HighPass,
             3 => FxMode::BandPass,
             _ => FxMode::Off,
         },
-        cutoff_hz: f64::from(f32::from_bits((filter >> 32) as u32)),
-        resonance: f64::from((filter >> 16 & 0xFFFF) as u16) / f64::from(u16::MAX),
-        drive: f64::from(drive),
-        output: f64::from(output),
-        route: if filter & 0xFF == 1 {
+        cutoff_hz: number(1),
+        resonance: number(2),
+        route: if cells[3] == 1 {
             Route::DriveFirst
         } else {
             Route::FilterFirst
         },
-    }
+        drive: number(4),
+        output: number(5),
+        delay: DelaySettings {
+            mix: number(6),
+            samples: number(7),
+            feedback: number(9),
+            damping: number(10),
+            ping_pong: flags & 1 != 0,
+            freeze: flags & 2 != 0,
+        },
+        reverb: ReverbSettings {
+            mix: number(12),
+            size: number(13),
+            damping: number(14),
+            predelay_ms: number(15),
+        },
+    };
+    (settings, number(8))
 }
 
 fn unpack_motion(bits: u64) -> Option<Motion> {
@@ -514,25 +659,75 @@ mod tests {
     }
 
     #[test]
-    fn the_insert_survives_the_two_words_it_crosses_in() {
-        // What goes into the atomics has to come out the other side as the same
-        // panel. A cutoff that arrived a few hertz off would be inaudible and a
-        // route that arrived flipped would not be, so both are checked.
-        let packed = pack_filter(2, 640.0, 0.5, 1);
-        let settings = unpack_fx(packed, pack_two(0.75, 0.5));
+    fn the_insert_survives_the_mailbox_it_crosses_in() {
+        // What goes in has to come out as the same panel. Seventeen fields, and
+        // a mistyped index would be a knob that silently drives another one.
+        let mailbox = FxMailbox::new();
+        mailbox.publish(&FxPanel {
+            mode: 2,
+            cutoff: 640.0,
+            resonance: 0.5,
+            route: 1,
+            drive: 0.75,
+            output: 0.5,
+            delay_mix: 0.4,
+            delay_samples: 1_234.0,
+            delay_sync: 0.125,
+            delay_feedback: 0.6,
+            delay_damping: 0.3,
+            ping_pong: true,
+            freeze: false,
+            reverb_mix: 0.2,
+            reverb_size: 0.8,
+            reverb_damping: 0.35,
+            reverb_predelay_ms: 30.0,
+        });
+        let (settings, sync) = mailbox.read().expect("a settled mailbox refused to be read");
+
+        // Exact where the number is exact in `f32` — a half, a quarter, a whole
+        // — and to a millionth where it is not. The cells are `f32` and that is
+        // the whole size of the decision.
         assert_eq!(settings.mode, FxMode::HighPass);
         assert_eq!(settings.route, Route::DriveFirst);
         assert_eq!(settings.cutoff_hz, 640.0);
-        assert!((settings.resonance - 0.5).abs() < 1e-4, "{}", settings.resonance);
+        assert_eq!(settings.resonance, 0.5);
         assert_eq!(settings.drive, 0.75);
         assert_eq!(settings.output, 0.5);
+        assert!((settings.delay.mix - 0.4).abs() < 1e-7);
+        assert_eq!(settings.delay.samples, 1_234.0);
+        assert!((settings.delay.feedback - 0.6).abs() < 1e-7);
+        assert!((settings.delay.damping - 0.3).abs() < 1e-7);
+        assert!(settings.delay.ping_pong);
+        assert!(!settings.delay.freeze);
+        assert!((settings.reverb.mix - 0.2).abs() < 1e-7);
+        assert!((settings.reverb.size - 0.8).abs() < 1e-7);
+        assert!((settings.reverb.damping - 0.35).abs() < 1e-7);
+        assert_eq!(settings.reverb.predelay_ms, 30.0);
+        assert_eq!(sync, 0.125);
 
         // Numbers Java could send that name nothing become the harmless choice
         // rather than whatever their low bits happen to spell.
-        let odd = unpack_fx(pack_filter(99, 1_000.0, -1.0, 99), pack_two(0.0, 1.0));
+        mailbox.publish(&FxPanel {
+            mode: 99,
+            route: 99,
+            ..FxPanel::default()
+        });
+        let (odd, _) = mailbox.read().expect("no read");
         assert_eq!(odd.mode, FxMode::Off);
         assert_eq!(odd.route, Route::FilterFirst);
-        assert_eq!(odd.resonance, 0.0);
+    }
+
+    #[test]
+    fn a_reader_that_catches_a_write_in_progress_says_so_instead_of_guessing() {
+        // The point of the counter. A half-written panel must be refused, not
+        // averaged — the caller then keeps the panel it already had, which is
+        // one block stale rather than a state nobody asked for.
+        let mailbox = FxMailbox::new();
+        mailbox.generation.store(1, Ordering::Release);
+        assert!(mailbox.read().is_none(), "a torn panel was handed out");
+
+        mailbox.generation.store(2, Ordering::Release);
+        assert!(mailbox.read().is_some(), "a settled panel was refused");
     }
 
     #[test]
@@ -546,14 +741,23 @@ mod tests {
 
         // A highpass far above the test tone, which is a slow sine — what is
         // left of it should be very little.
-        handle.set_fx(2, 4_000.0, 0.0, 0, 0.0, 1.0);
+        handle.set_fx(FxPanel {
+            mode: 2,
+            cutoff: 4_000.0,
+            output: 1.0,
+            ..FxPanel::default()
+        });
         handle.read(&mut out);
         handle.read(&mut out);
         let filtered = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!(filtered < plain * 0.2, "{plain} became {filtered}");
 
         // And switching it off gives the sound back, through the same handle.
-        handle.set_fx(0, 4_000.0, 0.0, 0, 0.0, 1.0);
+        handle.set_fx(FxPanel {
+            cutoff: 4_000.0,
+            output: 1.0,
+            ..FxPanel::default()
+        });
         handle.read(&mut out);
         let again = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!(again > plain * 0.8, "{plain} came back as {again}");

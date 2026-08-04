@@ -253,7 +253,7 @@ class PreviewPlayer {
      * The whole panel in one crossing, because the audio thread must never run
      * a block with half a change in it.
      */
-    fun setFx(fx: Fx) {
+    fun setFx(fx: Fx, syncFraction: Float, freeSamples: Float) {
         if (handle != 0L) {
             runCatching {
                 Native.previewSetFx(
@@ -264,6 +264,17 @@ class PreviewPlayer {
                     fx.route.ordinal,
                     fx.drive,
                     fx.output,
+                    fx.delayMix,
+                    freeSamples,
+                    syncFraction,
+                    fx.delayFeedback,
+                    fx.delayDamping,
+                    fx.pingPong,
+                    fx.freeze,
+                    fx.reverbMix,
+                    fx.reverbSize,
+                    fx.reverbDamping,
+                    fx.reverbPredelayMs,
                 )
             }
         }

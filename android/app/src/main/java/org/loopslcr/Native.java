@@ -140,15 +140,20 @@ public final class Native {
     public static native void previewSetMasterGain(long handle, float gain);
 
     /**
-     * Sets the insert on the sum: a filter and an overdrive, in either order.
+     * Sets the insert on the sum: a filter, an overdrive, a delay and a room.
      *
      * <p>{@code mode} is 0 off, 1 lowpass, 2 highpass, 3 bandpass. {@code route}
      * is 0 filter first, 1 drive first. {@code cutoff} is in hertz;
-     * {@code resonance}, {@code drive} run 0 to 1; {@code output} is a linear
-     * trim after both.
+     * {@code resonance}, {@code drive} and every mix and amount run 0 to 1;
+     * {@code output} is a linear trim.
      *
-     * <p>Every knob in one call, for the same reason the two loop gains are:
-     * the audio thread must never run a block with half a change in it.
+     * <p>{@code delaySamples} is a free time in output samples.
+     * {@code delaySync}, above zero, is a fraction of the loop and outranks it —
+     * resolved against the loop's own length and the speed it is playing at,
+     * which is what makes a synced echo follow the varispeed.
+     *
+     * <p>Every knob in one call, and it lands as one panel. With a freeze switch
+     * in there, half a change is a state nobody asked for.
      */
     public static native void previewSetFx(
             long handle,
@@ -157,7 +162,18 @@ public final class Native {
             float resonance,
             int route,
             float drive,
-            float output);
+            float output,
+            float delayMix,
+            float delaySamples,
+            float delaySync,
+            float delayFeedback,
+            float delayDamping,
+            boolean pingPong,
+            boolean freeze,
+            float reverbMix,
+            float reverbSize,
+            float reverbDamping,
+            float reverbPredelayMs);
 
     /** Takes the second loop away. The first keeps playing. */
     public static native void previewClearPartner(long handle);
