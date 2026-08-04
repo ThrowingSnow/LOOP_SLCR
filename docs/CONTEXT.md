@@ -1605,3 +1605,54 @@ wird — Seite *und* Versatz.
 Teilt `holdA + holdB` den Loop nicht, kommt die letzte Wendung vor der Naht kurz
 heraus. Der Loop wiederholt sich trotzdem exakt, weil die Zählung mit ihm neu
 beginnt — es ist eine musikalische Wahl, kein Fehler. Also steht es da.
+
+## 38. Ein Tempo, zwei Bezugspunkte
+
+Gewünscht: das Master-Tempo auch auf CUTTER 2, und wählen können, von welchem
+Loop die Geschwindigkeit genommen wird.
+
+**Es gibt nur eine Geschwindigkeit, weil es nur einen Lesekopf gibt.** Was die
+`MSTR`-Chips wählen, ist, *woran* sie gemessen wird: gedrückt ziehen sie das
+Paar auf das Eigentempo dieses Loops.
+
+Bewusst eine **Aktion, kein Modus**. Als Modus müsste er sich jedes Mal neu
+anwenden, wenn sich das Bezugstempo ändert — und läge damit im Streit mit dem
+nächsten Zug am Tempo-Regler. Gedrückt setzt er das Ziel; der Chip leuchtet,
+solange das Ziel noch passt, und ein Zug bewegt sich einfach davon weg, ohne
+dass etwas ab-gewählt werden müsste.
+
+Der Varispeed-Streifen steht jetzt auf beiden Cuttern. Dieselbe Einstellung,
+zwei Orte — weil man auf CUTTER 2 steht, wenn man hören will, wie der zweite
+Loop sitzt, und jemanden für einen Regler auf einen anderen Reiter zu schicken
+ist, wie ein Bedienelement aufhört, benutzt zu werden.
+
+## 39. Der Mixer misst pro Loop, nicht pro Ausgang
+
+Mit laufendem Swap klingt immer nur *einer* der beiden. Eine Anzeige, die die
+Summe zeigt, könnte die Frage, für die diese Seite existiert, nicht beantworten
+— „welcher der beiden ist zu laut". Also zeigt jeder Balken den eigenen Beitrag
+seines Loops, und der stumme steht auf null. Während der Swap-Blende bewegen
+sich beide, was genau das ist, was gerade passiert.
+
+**Zwei Skalen, absichtlich gegenläufig:**
+
+- Die **Anzeige ist in Dezibel**. Linear säße alles, was einzustellen sich lohnt,
+  im linken Zehntel des Balkens, und die Anzeige wäre Dekoration.
+- Der **Regler ist linear in der Lautheit**. Auf halber Strecke soll es etwa halb
+  so laut klingen, nicht 6 dB leiser. Andersherum hätte man ein Bedienelement,
+  das über den größten Teil seines Wegs fast nichts tut.
+
+Beides hängt an einem Test, weil beides leicht falsch herum ist und keines davon
+auf einem Screenshot zu sehen wäre.
+
+**Anstieg sofort, Abfall langsam.** Eine Anzeige, die so schnell fällt wie das
+Audio, flackert bei jedem Schlag und liest sich als Rauschen.
+
+Die beiden Gains reisen in **einem** Wort, aus demselben Grund wie die Motion:
+einzeln gesetzt könnte ein Block mit dem neuen ersten und dem alten zweiten Gain
+gelesen werden — eine Balance, die niemand wollte, genau dort, wo ein Swap sie
+hörbar macht.
+
+Ein negativer Gain ist ausgeschlossen: das wäre eine Polaritätsumkehr im Gewand
+eines Lautstärkereglers, und beim Swap würde sie als „ein Loop klingt hohl"
+gehört.

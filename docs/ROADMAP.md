@@ -405,8 +405,20 @@ worth exactly as much as its regression check.
         the swap on a grid boundary, so both stay in time with nothing to
         synchronise. CUTTER 1 / CUTTER 2, and a partner of the wrong length
         refused with both frame counts rather than stretched
+  - [x] **MIX tab** — per-loop trim and a per-loop peak meter. Metered per
+        loop rather than per output, because with a swap running only one of
+        them is sounding
+  - [x] Master speed on both cutters, with MSTR chips choosing which loop the
+        one speed is measured against
   - [ ] Export the pair (needs the swap in exact rational frames, like the
         motion, and a decision about what a two-loop file even is)
+  - [ ] **FX tab: delay and reverb.** Its own milestone — the audio path may
+        not allocate, so every line has to be owned up front, and each effect
+        needs its own tests before it is worth having:
+    - [ ] Delay: time as sync divisions *or* free ms, feedback, ping-pong,
+          freeze, and a filter in the feedback path
+    - [ ] Reverb: size, damping, pre-delay, wet/dry — dependency-free, so a
+          Schroeder/FDN written here rather than a crate
   - [ ] Draggable play head (seek exists; nothing drives it from the waveform yet)
 - [x] Dark theme
 - [x] Instrumented tests: the engine on a real Android runtime, the screen rendered
