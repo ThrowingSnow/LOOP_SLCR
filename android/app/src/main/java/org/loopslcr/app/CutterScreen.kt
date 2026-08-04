@@ -273,7 +273,17 @@ fun CutterScreen(
 
         if (wide) {
             Row(Modifier.fillMaxSize()) {
-                Column(Modifier.weight(1f)) { head() }
+                // Scrollable sideways, where the half-height is not always
+                // enough for a picture and a varispeed. Upright it is pinned,
+                // which is the whole point of the split; here "pinned" would
+                // mean "clipped", and a control you cannot reach is worse than
+                // one you have to nudge into view.
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .verticalScroll(rememberScrollState()),
+                ) { head() }
                 Column(Modifier.weight(1f)) { body(Modifier.fillMaxHeight()) }
             }
         } else {
@@ -318,11 +328,16 @@ private fun Header(
                         },
                     ),
             ) {
+                // One line each, always. Sideways the header is half as wide,
+                // and a wrapped title pushed the varispeed off the bottom of
+                // its own column — the name is worth eliding, the layout is
+                // not worth breaking.
                 Text(
                     "LOOP_SLCR",
                     color = Palette.text,
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp,
+                    maxLines = 1,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -330,6 +345,9 @@ private fun Header(
                         color = Palette.dim,
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                     if (loaded != null) {
                         Caret(open)
@@ -902,63 +920,90 @@ internal fun PitchStrip(
     // Both readouts show at all times. The dim one is derived, the bright one is
     // what you are driving; seeing the other unit move while you drag is most of
     // the reason to have two units at all.
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Chip("semitones", s.speedMode == SpeedMode.Semitones) {
-            onChange { it.copy(speedMode = SpeedMode.Semitones) }
-        }
-        Spacer(Modifier.width(6.dp))
-        // In semitone mode this is the *setting*, not the plan. Same lesson the
-        // markers taught: a live control has to follow the finger, and reading
-        // it back from the pipeline puts a debounce between a drag and its own
-        // readout. In target-BPM mode there is no setting to show — the
-        // semitones are derived — so the plan is the only source.
-        val shown = when (s.speedMode) {
-            SpeedMode.Semitones -> s.semitones
-            SpeedMode.TargetBpm -> plan?.semitones
-        }
-        Text(
-            shown?.let { "%+.2f st".format(it) } ?: "—",
-            color = when {
-                shown == null -> Palette.dim
-                s.speedMode != SpeedMode.Semitones -> Palette.dim
-                shown == 0.0 -> Palette.dim
-                else -> Palette.text
-            },
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
-            maxLines = 1,
-        )
-
-        Spacer(Modifier.weight(1f))
-
-        Chip("target BPM", s.speedMode == SpeedMode.TargetBpm) {
-            onChange { it.copy(speedMode = SpeedMode.TargetBpm) }
-        }
-        Spacer(Modifier.width(6.dp))
-        if (s.speedMode == SpeedMode.TargetBpm) {
-            TempoField(
-                value = typed,
-                placeholder = source?.let(::trim) ?: "—",
-                onValueChange = { entered ->
-                    typed = entered
-                    val value = entered.toDoubleOrNull()
-                    onChange { it.copy(targetBpm = if (value != null && value > 0) value else null) }
-                },
-                modifier = Modifier.width(74.dp).testTag("tempoField"),
-            )
-        } else {
-            // Not editable in the other mode, but not missing either: the tempo
-            // the cut will land on is the whole point of moving the semitones,
-            // and it belongs beside the button that would let you set it.
+    //
+    // **Two rows when there is not room for one.** Sideways the strip has half a
+    // screen, and everything on it has a minimum width — squeezed, the chip's
+    // own label went vertical, one letter per line. Rather than shrink a control
+    // until it is unreadable, the row breaks in the one place it has a seam.
+    @Composable
+    fun semitoneUnit() {
+            Chip("semitones", s.speedMode == SpeedMode.Semitones) {
+                onChange { it.copy(speedMode = SpeedMode.Semitones) }
+            }
+            Spacer(Modifier.width(6.dp))
+            // In semitone mode this is the *setting*, not the plan. Same lesson the
+            // markers taught: a live control has to follow the finger, and reading
+            // it back from the pipeline puts a debounce between a drag and its own
+            // readout. In target-BPM mode there is no setting to show — the
+            // semitones are derived — so the plan is the only source.
+            val shown = when (s.speedMode) {
+                SpeedMode.Semitones -> s.semitones
+                SpeedMode.TargetBpm -> plan?.semitones
+            }
             Text(
-                plan?.resultingTempo?.let { trim(it) } ?: source?.let(::trim) ?: "—",
-                color = Palette.dim,
+                shown?.let { "%+.2f st".format(it) } ?: "—",
+                color = when {
+                    shown == null -> Palette.dim
+                    s.speedMode != SpeedMode.Semitones -> Palette.dim
+                    shown == 0.0 -> Palette.dim
+                    else -> Palette.text
+                },
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
-                modifier = Modifier.width(74.dp),
-                textAlign = TextAlign.End,
             )
+
+    }
+
+    @Composable
+    fun targetUnit() {
+            Chip("target BPM", s.speedMode == SpeedMode.TargetBpm) {
+                onChange { it.copy(speedMode = SpeedMode.TargetBpm) }
+            }
+            Spacer(Modifier.width(6.dp))
+            if (s.speedMode == SpeedMode.TargetBpm) {
+                TempoField(
+                    value = typed,
+                    placeholder = source?.let(::trim) ?: "—",
+                    onValueChange = { entered ->
+                        typed = entered
+                        val value = entered.toDoubleOrNull()
+                        onChange { it.copy(targetBpm = if (value != null && value > 0) value else null) }
+                    },
+                    modifier = Modifier.width(74.dp).testTag("tempoField"),
+                )
+            } else {
+                // Not editable in the other mode, but not missing either: the tempo
+                // the cut will land on is the whole point of moving the semitones,
+                // and it belongs beside the button that would let you set it.
+                Text(
+                    plan?.resultingTempo?.let { trim(it) } ?: source?.let(::trim) ?: "—",
+                    color = Palette.dim,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    modifier = Modifier.width(74.dp),
+                    textAlign = TextAlign.End,
+                )
+            }
+    }
+
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth < 340.dp) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    semitoneUnit()
+                }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    targetUnit()
+                }
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                semitoneUnit()
+                Spacer(Modifier.weight(1f))
+                targetUnit()
+            }
         }
     }
 

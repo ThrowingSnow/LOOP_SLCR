@@ -413,6 +413,10 @@ worth exactly as much as its regression check.
         the speed slider choosing which loop the one speed is measured
         against — at most one deck at a time, and released by any hand-moved
         speed so the mode never fights the finger
+  - [x] **SETTINGS → DISPLAY** — mixer as a desk or as rows, and orientation
+        auto/portrait/landscape, both remembered between runs. Sideways the
+        cutter splits left/right instead of top/bottom, decided by measuring
+        the layout rather than asking the device
   - [ ] Export the pair (needs the swap in exact rational frames, like the
         motion, and a decision about what a two-loop file even is)
   - [ ] **FX tab: delay and reverb.** Its own milestone — the audio path may

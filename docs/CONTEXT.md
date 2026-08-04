@@ -1710,3 +1710,61 @@ hörbar macht.
 Ein negativer Gain ist ausgeschlossen: das wäre eine Polaritätsumkehr im Gewand
 eines Lautstärkereglers, und beim Swap würde sie als „ein Loop klingt hohl"
 gehört.
+
+## 40. Zwei Ansichten, und wer sie wählt
+
+Gefragt: ob man die senkrechte und die liegende Ansicht in den Settings
+einstellen kann. Ja — und beide Fragen dahinter sind dieselbe Frage.
+
+### Pult oder Zeilen
+
+Ein Pult braucht Breite, und ein hochkant gehaltenes Telefon hat wenig davon:
+drei Züge auf einem schmalen Schirm sind drei schmale Züge. Zeilen geben jedem
+Kanal die volle Breite und dem Dateinamen Platz, zum Preis genau des Vergleichs,
+für den das Pult da ist. Was davon wichtiger ist, kann der Code nicht wissen —
+also ist es eine Einstellung und keine Vermutung.
+
+**Beide Ansichten teilen sich jede Zahl.** Dieselbe Anzeigenskala, derselbe
+Faderweg, dieselbe Rastung auf Unity — nur die Richtung ändert sich. Ein
+Bedienelement, das sich je nach Zeichenrichtung anders verhält, sind zwei
+Bedienelemente mit einem Namen.
+
+### Quer: derselbe Schnitt, um neunzig Grad gedreht
+
+Das Bild nimmt die linke Hälfte, die Panels stehen daneben statt darunter.
+Entschieden wird das **an den eigenen Constraints des Layouts**
+(`maxWidth > maxHeight`), nicht an der Gerätemeldung: ein hochkant gehaltenes
+Tablet mit Platz will dieselbe Anordnung, und „Landscape" hätte das falsch
+beantwortet.
+
+Quer ist die obere Hälfte **scrollbar**. Hochkant ist sie festgepinnt, das ist
+der ganze Sinn des Schnitts; bei halber Höhe hieße „festgepinnt" aber
+„abgeschnitten", und ein Regler, den man nicht erreicht, ist schlimmer als
+einer, den man ins Bild schieben muss.
+
+Zwei Dinge, die dabei kaputtgingen und geflickt wurden — beide erst auf einem
+Screenshot sichtbar, nicht in einem Test:
+
+- Der Titel brach um („LOOP_ / SLCR") und schob den Varispeed aus seiner Spalte.
+  Jetzt eine Zeile, Name mit Auslassungspunkten.
+- Der Varispeed-Streifen brach bei halber Breite so weit ein, dass das
+  Chip-Label senkrecht stand, ein Buchstabe pro Zeile. Statt ein Bedienelement
+  bis zur Unlesbarkeit zu schrumpfen, bricht die Zeile jetzt an ihrer einzigen
+  Naht in zwei.
+
+### Gemerkt, nicht geraten
+
+`SharedPreferences`, zwei Enums, beim Start gelesen und beim Tippen geschrieben.
+Eine Einstellung, die sich bei jedem Start vergisst, wäre schlimmer als keine:
+man träfe die Wahl jedes Mal neu, was das Gegenteil dessen ist, wofür eine
+Einstellung da ist. Ein unbekannter Wert in der Datei fällt auf den Standard
+zurück, statt beim Start zu werfen.
+
+Die Ausrichtung wird **vor dem ersten Frame** gesetzt und beim Tippen sofort —
+eine App, die aufrecht startet und dann herumschwenkt, wäre schlechter als eine,
+die die Wahl nie angeboten hätte.
+
+Und: `Display` ist bewusst von `Settings` getrennt. Die einen beschreiben einen
+Schnitt und gehören zu einer Datei, die anderen beschreiben einen Bildschirm und
+gehören zu einem Menschen.
+
