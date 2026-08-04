@@ -1800,3 +1800,56 @@ gegen die Eigenlänge.
 Der Gegenbeweis steht als Test: ohne `targetFrames` fällt er mit genau der
 Fehlermeldung, die auf dem Telefon stand.
 
+
+## 42. Ein Insert, und warum die Reihenfolge ein Regler ist
+
+Gewünscht: „evtl sogar noch einen Filter und Overdrive, wo man den Filter vor
+oder nach dem Overdrive routen kann". Genau das ist gebaut — und die Reihenfolge
+ist kein Detail, sondern der interessanteste Regler von beiden.
+
+**Ein Tiefpass *vor* dem Overdrive** nimmt die Höhen weg, bevor irgendetwas sie
+verzerren kann: der Overdrive hört nur, was durchgekommen ist, und das Ergebnis
+bleibt so dunkel wie der Filter. **Ein Tiefpass *hinter* dem Overdrive** nimmt
+die Höhen weg, die der Overdrive selbst gemacht hat: verzerrt wird alles, und der
+Filter entscheidet danach, wie viel davon bei dir ankommt — das ist der Sweep,
+der etwas zum Durchfahren hat. Beides macht man mit Absicht, also ist keins fest
+verdrahtet.
+
+**Warum das nicht `ops::filter` ist.** Das Modul filtert einen *Loop* und muss
+sich Mühe geben: ein Filter, der bei Stille anfängt, setzt einen Einschwinger auf
+Frame 0 — genau die Naht, für die es dieses Programm gibt. Deshalb läuft das
+Material dort zweimal durch und nur der zweite Durchgang wird behalten. Dieser
+Filter hier filtert einen *Lesekopf*, und der hält an der Naht nicht an. Er läuft
+vom Start der Wiedergabe bis zum Stopp, über jede Loop-Grenze, jeden Sprung und
+jeden Swap, und trägt seinen Zustand die ganze Zeit mit — wie das Kabel, das er
+vertritt. Es gibt nichts aufzuwärmen, weil nichts neu anfängt.
+
+**Der Overdrive hält oben still und holt alles darunter hoch.** `tanh`, hinein
+gedrückt und normiert auf das, womit ein Vollausschlag herauskäme. Das ist, was
+Aufdrehen an einem Overdrive tut: es fügt keinen Pegel hinzu, es nimmt den
+Abstand zwischen leise und laut weg. Nebenbei fällt eine Garantie ab, die in
+einer Kiste vor dem Master-Fader etwas wert ist: aus einem Signal, das keine
+Übersteuerung hatte, kann er in keiner Stellung eine machen.
+
+**Aus ist aus, bis aufs Bit.** Nicht ein Filter auf harmloser Einstellung — der
+Preview fragt `is_wire()` und nimmt den alten Pfad. Eine Sitzung, die das
+FX-Feld nie öffnet, bekommt die Samples, die sie bekommen hätte, bevor es das
+Feld gab. „Aus" auf zwei Nachkommastellen wäre eine andere Behauptung.
+
+**Warum es auf der MIX-Seite steht.** Ein Insert ist ein Platz auf dem Pult,
+kein eigenes Zimmer. Er sitzt zwischen den Kanalfadern und dem Master, und das
+Master-Meter darüber ist das, was sagt, was das Aufdrehen angerichtet hat. Auf
+einem eigenen Tab wäre es ein Regler, den man dreht, während man ein Bild von
+einem anderen Signal ansieht.
+
+**Sechs Regler kreuzen in zwei Wörtern.** Sie passen nicht in vierundsechzig Bit,
+und der Mutex gehört für die Länge eines Blocks dem Audio-Thread. Anders als bei
+der Motion ist ein zerrissener Lesevorgang hier harmlos: jedes Feld ist ein
+stufenloser Regler mit für sich gültigen Werten, also ist „neuer Cutoff, alte
+Resonanz" eine Stellung, an der die Hand vorbeigekommen ist — keine Einstellung,
+die niemand gewählt hat. Der Cutoff behält alle zweiunddreißig Bit, weil er der
+ist, den eine Hand sweept, und eine grobe Stufe darin hört man als Treppe.
+
+**Nichts davon wird exportiert**, aus demselben Grund wie Varispeed und Motion:
+der Schnitt ist, was die Datei *ist*, das Insert ist, was deine Hände damit
+gemacht haben. Ein eingebackener Filtersweep ist kein Loop mehr.

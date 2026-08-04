@@ -419,13 +419,22 @@ worth exactly as much as its regression check.
         the layout rather than asking the device
   - [ ] Export the pair (needs the swap in exact rational frames, like the
         motion, and a decision about what a two-loop file even is)
-  - [ ] **FX tab: delay and reverb.** Its own milestone — the audio path may
-        not allocate, so every line has to be owned up front, and each effect
+  - [x] **The insert, on the MIX page** — a state-variable filter (LP/HP/BP,
+        cutoff, resonance) and an overdrive, with a switch for which of them
+        hears the other. It sits after both channel faders and before the
+        master, which is where an insert goes on a desk and why the master
+        meter is the one that reads it. Off is off to the bit: the preview
+        asks `is_wire()` and takes the old path, so a session that never
+        opens the panel gets the samples it got before there was one
+  - [ ] **The rest of the insert: delay and reverb.** The audio path may not
+        allocate, so every line has to be owned up front, and each effect
         needs its own tests before it is worth having:
     - [ ] Delay: time as sync divisions *or* free ms, feedback, ping-pong,
           freeze, and a filter in the feedback path
     - [ ] Reverb: size, damping, pre-delay, wet/dry — dependency-free, so a
           Schroeder/FDN written here rather than a crate
+    - [ ] Baking the insert into an export, if it is ever wanted — today it
+          is a performance and the cut is what the file is
   - [ ] Draggable play head (seek exists; nothing drives it from the waveform yet)
 - [x] Dark theme
 - [x] Instrumented tests: the engine on a real Android runtime, the screen rendered
