@@ -159,7 +159,7 @@ class EngineTest {
             val frames = org.json.JSONObject(org.loopslcr.Native.previewInfo(handle))
                 .getLong("frames").toInt()
             // Eight pieces, reaching up to three of them, scattered.
-            org.loopslcr.Native.previewSetMotion(handle, true, 8, 3, 3)
+            org.loopslcr.Native.previewSetMotion(handle, true, 8, 3, 1, 3)
 
             // Three passes: the first starts cold with nothing to cross-fade
             // from, so the period is checked between the second and the third.
@@ -188,7 +188,7 @@ class EngineTest {
             }
 
             // And switching it off puts the audio back where the clock is.
-            org.loopslcr.Native.previewSetMotion(handle, false, 8, 3, 3)
+            org.loopslcr.Native.previewSetMotion(handle, false, 8, 3, 1, 3)
             readWholeLoop(handle, frames)
             val info = org.json.JSONObject(org.loopslcr.Native.previewInfo(handle))
             assertEquals(

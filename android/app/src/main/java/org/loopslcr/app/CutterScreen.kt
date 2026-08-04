@@ -75,6 +75,10 @@ fun CutterScreen(
     motion: MotionSettings = MotionSettings(),
     onMotion: ((MotionSettings) -> MotionSettings) -> Unit = {},
 ) {
+    // One lane or two, and it is a *view*, not a setting: nothing about the file
+    // or the cut changes. Folded, the picture is half as tall, and on a phone
+    // that half is the difference between reading the plan and scrolling for it.
+    var folded by rememberSaveable { mutableStateOf(false) }
     // Two parts, and the split is the point.
     //
     // **What you are looking at stays put.** The waveform and the varispeed are
@@ -92,7 +96,15 @@ fun CutterScreen(
             Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Header(loaded, busy, playing, onOpen, onPlay)
+            Header(
+                loaded,
+                busy,
+                playing,
+                onOpen,
+                onPlay,
+                folded = folded,
+                onFold = { folded = !folded },
+            )
 
             if (problem != null) Problem(problem, onDismissProblem)
 
@@ -106,9 +118,11 @@ fun CutterScreen(
                         playHead = playHead,
                         samplesPerBar = plan?.samplesPerBar,
                         onDrag = onDragMarker,
+                        folded = folded,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(150.dp),
+                            .height(if (folded) 84.dp else 150.dp)
+                            .testTag("wave"),
                     )
                 }
 
@@ -156,7 +170,8 @@ fun CutterScreen(
             Section(
                 "Motion",
                 summary = if (motion.on) {
-                    "${motion.gridName(settings.sig)} · ±${motion.depth} · " +
+                    "${motion.gridName(settings.sig)} · every " +
+                        "${motion.rateName(settings.sig)} · ±${motion.depth} · " +
                         motion.shape.name.lowercase()
                 } else {
                     "off"
@@ -223,6 +238,8 @@ private fun Header(
     playing: Boolean,
     onOpen: () -> Unit,
     onPlay: () -> Unit,
+    folded: Boolean = false,
+    onFold: () -> Unit = {},
 ) {
     // Collapsed by default, and keyed on the file so a new one never opens
     // showing the last file's figures.
@@ -272,6 +289,19 @@ private fun Header(
             if (loaded == null) {
                 OutlinedButton(onClick = onOpen) { Text("Open") }
             } else {
+                // Beside Play, because it is the other thing you reach for while
+                // looking at the picture rather than at the numbers.
+                Text(
+                    if (folded) "1ch" else "2ch",
+                    color = Palette.dim,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier
+                        .clickable { onFold() }
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                        .testTag("lanes"),
+                )
+                Spacer(Modifier.width(4.dp))
                 OutlinedButton(onClick = onPlay, enabled = busy is Busy.Idle) {
                     Text(if (playing) "Stop" else "Play")
                 }
@@ -780,15 +810,6 @@ private fun PitchStrip(
     analysis: Analysis,
     onChange: ((Settings) -> Settings) -> Unit,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Chip("semitones", s.speedMode == SpeedMode.Semitones) {
-            onChange { it.copy(speedMode = SpeedMode.Semitones) }
-        }
-        Chip("target BPM", s.speedMode == SpeedMode.TargetBpm) {
-            onChange { it.copy(speedMode = SpeedMode.TargetBpm) }
-        }
-    }
-
     // The source tempo, which is what a target tempo is a ratio *of*. Without
     // it there is no honest slider range, only an invented one.
     //
@@ -800,8 +821,7 @@ private fun PitchStrip(
     val source = plan?.tempo ?: analysis.tempo
 
     // Typed as well as swept: a slider cannot land on exactly 90, and exactly 90
-    // is usually the point. Hoisted out of the `when` below so it can ride the
-    // readout row — see [TempoField].
+    // is usually the point.
     var typed by remember { mutableStateOf(s.targetBpm?.let(::trim) ?: "") }
     // Adopt a value that arrived from somewhere else — the slider, or the
     // calculator's "send to cutter". Keyed on the *value*, not on the mode:
@@ -813,59 +833,85 @@ private fun PitchStrip(
         if (s.targetBpm != null && s.targetBpm != mine) typed = trim(s.targetBpm)
     }
 
-    // A quarter of the strip, measured against the strip rather than against
-    // whatever the readout left over — a field whose width depends on the length
-    // of the sentence beside it changes size as you drag the slider.
-    BoxWithConstraints(Modifier.fillMaxWidth().testTag("varispeed")) {
-        val quarter = maxWidth / 4
+    // One row for both units: each mode's button, and immediately behind it the
+    // number that mode produces. They were a button row and a readout row, which
+    // spent a whole line of a screen whose entire layout exists to keep the
+    // waveform in sight — and put the number you type a slider away from the
+    // number it makes.
+    //
+    // Both readouts show at all times. The dim one is derived, the bright one is
+    // what you are driving; seeing the other unit move while you drag is most of
+    // the reason to have two units at all.
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Chip("semitones", s.speedMode == SpeedMode.Semitones) {
+            onChange { it.copy(speedMode = SpeedMode.Semitones) }
+        }
+        Spacer(Modifier.width(6.dp))
+        // In semitone mode this is the *setting*, not the plan. Same lesson the
+        // markers taught: a live control has to follow the finger, and reading
+        // it back from the pipeline puts a debounce between a drag and its own
+        // readout. In target-BPM mode there is no setting to show — the
+        // semitones are derived — so the plan is the only source.
+        val shown = when (s.speedMode) {
+            SpeedMode.Semitones -> s.semitones
+            SpeedMode.TargetBpm -> plan?.semitones
+        }
+        Text(
+            shown?.let { "%+.2f st".format(it) } ?: "—",
+            color = when {
+                shown == null -> Palette.dim
+                s.speedMode != SpeedMode.Semitones -> Palette.dim
+                shown == 0.0 -> Palette.dim
+                else -> Palette.text
+            },
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+        )
 
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("speed", color = Palette.dim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-            // In semitone mode this is the *setting*, not the plan. Same lesson the
-            // markers taught: a live control has to follow the finger, and reading
-            // it back from the pipeline puts a debounce between a drag and its own
-            // readout. In target-BPM mode there is no setting to show — the
-            // semitones are derived — so the plan is the only source.
-            val shown = when (s.speedMode) {
-                SpeedMode.Semitones -> s.semitones
-                SpeedMode.TargetBpm -> plan?.semitones
-            }
+        Spacer(Modifier.weight(1f))
+
+        Chip("target BPM", s.speedMode == SpeedMode.TargetBpm) {
+            onChange { it.copy(speedMode = SpeedMode.TargetBpm) }
+        }
+        Spacer(Modifier.width(6.dp))
+        if (s.speedMode == SpeedMode.TargetBpm) {
+            TempoField(
+                value = typed,
+                placeholder = source?.let(::trim) ?: "—",
+                onValueChange = { entered ->
+                    typed = entered
+                    val value = entered.toDoubleOrNull()
+                    onChange { it.copy(targetBpm = if (value != null && value > 0) value else null) }
+                },
+                modifier = Modifier.width(74.dp).testTag("tempoField"),
+            )
+        } else {
+            // Not editable in the other mode, but not missing either: the tempo
+            // the cut will land on is the whole point of moving the semitones,
+            // and it belongs beside the button that would let you set it.
             Text(
-                shown?.let { "  %+.2f st".format(it) } ?: "  —",
-                color = if (shown == null || shown == 0.0) Palette.dim else Palette.text,
+                plan?.resultingTempo?.let { trim(it) } ?: source?.let(::trim) ?: "—",
+                color = Palette.dim,
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                modifier = Modifier.width(74.dp),
+                textAlign = TextAlign.End,
             )
-            if (plan != null && plan.ratio != 1.0) {
-                Text(
-                    "   ${trim(plan.tempo)} → ${trim(plan.resultingTempo)} BPM",
-                    color = if (plan.ratioExact) Palette.dim else Palette.warn,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            // The number you type sits on the same line as the number it produces.
-            // As a full-width Material field it was three rows tall for four
-            // characters, and the two halves of one fact were a slider apart.
-            if (s.speedMode == SpeedMode.TargetBpm) {
-                TempoField(
-                    value = typed,
-                    placeholder = source?.let(::trim) ?: "—",
-                    onValueChange = { entered ->
-                        typed = entered
-                        val value = entered.toDoubleOrNull()
-                        onChange { it.copy(targetBpm = if (value != null && value > 0) value else null) }
-                    },
-                    modifier = Modifier.width(quarter).testTag("tempoField"),
-                )
-            }
         }
+    }
+
+    if (plan != null && plan.ratio != 1.0 && !plan.ratioExact) {
+        // Only when it is *not* exact. The resulting tempo is on the row above;
+        // what that row cannot say is that the ratio did not come out clean, and
+        // a warning is the one thing folding may never hide.
+        Text(
+            "${trim(plan.tempo)} → ${trim(plan.resultingTempo)} BPM, not exact",
+            color = Palette.warn,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+        )
     }
 
     when (s.speedMode) {
@@ -962,7 +1008,29 @@ private fun MotionControls(
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             MotionSettings.divisions.forEach { per ->
                 Chip(MotionSettings.gridName(per, s.sig), m.perBar == per) {
-                    onMotion { it.copy(perBar = per) }
+                    // The rate may not be finer than the grid — a move with no
+                    // piece to land on is not a thing this can mean — so a
+                    // coarser grid carries the rate along with it.
+                    onMotion { it.copy(perBar = per, ratePerBar = it.ratePerBar.coerceAtMost(per)) }
+                }
+            }
+        }
+    }
+
+    // How often, as opposed to where. One control did both to begin with, which
+    // meant asking for half-beat landings also asked for a half-beat stutter:
+    // the fine grid was unusable at any musical rate.
+    //
+    // Counted in the same per-bar unit as the grid, so there is no number here
+    // that could fall between two beats. That is the whole of "beat-synced" —
+    // not a setting, a unit.
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("every", color = Palette.dim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+        Spacer(Modifier.width(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            MotionSettings.divisions.filter { it <= m.perBar }.forEach { rate ->
+                Chip(MotionSettings.gridName(rate, s.sig), m.ratePerBar == rate) {
+                    onMotion { it.copy(ratePerBar = rate) }
                 }
             }
         }

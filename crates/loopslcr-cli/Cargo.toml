@@ -1,7 +1,11 @@
 [package]
 name = "loopslcr-cli"
+description = "Command-line front end for LOOP_SLCR: sample-exact loop trimming"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "loopslcr"

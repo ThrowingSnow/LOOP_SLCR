@@ -82,15 +82,18 @@ public final class Native {
      * Sets the stepped displacement of the play head, or turns it off.
      *
      * <p>The loop is divided into {@code steps} equal pieces and the head is
-     * displaced by up to {@code depth} whole pieces at each piece boundary, so
-     * what comes out always starts where a piece starts and the loop still
-     * repeats. {@code shape} is 0 rise, 1 fall, 2 swing, 3 scatter.
+     * displaced by up to {@code depth} whole pieces, so what comes out always
+     * starts where a piece starts and the loop still repeats. {@code every} is
+     * how many pieces pass between moves — the grid says where a jump may land,
+     * this says how often one happens, and counting it in pieces is what makes
+     * the rate beat-synced with no number that could fall between two beats.
+     * {@code shape} is 0 rise, 1 fall, 2 swing, 3 scatter, 4 walk.
      *
      * <p>Lock-free; callable from any thread. Takes effect at the next boundary,
      * so turning a control while the loop plays does not click.
      */
     public static native void previewSetMotion(
-            long handle, boolean on, int steps, int depth, int shape);
+            long handle, boolean on, int steps, int depth, int every, int shape);
 
     /** Moves the play head, in source frames. Wraps. */
     public static native void previewSeek(long handle, double frame);

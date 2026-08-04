@@ -97,9 +97,11 @@ impl Handle {
     /// `steps` of zero, or `on` false, means none. An unknown shape number is
     /// treated as the first one rather than refused: this is a control surface,
     /// and the audio thread is the last place to start reporting errors.
-    pub fn set_motion(&self, on: bool, steps: u32, depth: u32, shape: u32) {
-        self.motion
-            .store(pack_motion(on, steps, depth, shape), Ordering::Relaxed);
+    pub fn set_motion(&self, on: bool, steps: u32, depth: u32, every: u32, shape: u32) {
+        self.motion.store(
+            pack_motion(on, steps, depth, every, shape),
+            Ordering::Relaxed,
+        );
     }
 
     pub fn channels(&self) -> usize {
@@ -170,7 +172,7 @@ impl Handle {
 /// crosses no boundary but the atomic, and nothing outside is entitled to read
 /// it. Bit 63 says whether there is a motion at all, so "off" is a distinct
 /// value rather than a depth that happens to be zero.
-fn pack_motion(on: bool, steps: u32, depth: u32, shape: u32) -> u64 {
+fn pack_motion(on: bool, steps: u32, depth: u32, every: u32, shape: u32) -> u64 {
     if !on || steps == 0 {
         return 0;
     }
@@ -179,11 +181,18 @@ fn pack_motion(on: bool, steps: u32, depth: u32, shape: u32) -> u64 {
     // not an error worth failing playback over.
     let steps = steps.min(4096);
     let depth = depth.min(steps.saturating_sub(1));
+    // A rate slower than the whole loop would mean one move per pass, which is
+    // no motion with extra steps; a rate of zero would mean dividing by it.
+    let every = every.clamp(1, steps);
     // Masked, an unknown shape becomes whichever one its low bits name — a
     // shape nobody chose, arriving as a plausible one. Out of range means the
     // default, and it means it here rather than three layers down.
-    let shape = if shape > 3 { 0 } else { shape };
-    1 << 63 | u64::from(steps) | u64::from(depth) << 16 | u64::from(shape) << 32
+    let shape = if shape > LAST_SHAPE { 0 } else { shape };
+    1 << 63
+        | u64::from(steps)
+        | u64::from(depth) << 16
+        | u64::from(shape) << 32
+        | u64::from(every) << 36
 }
 
 fn unpack_motion(bits: u64) -> Option<Motion> {
@@ -193,14 +202,22 @@ fn unpack_motion(bits: u64) -> Option<Motion> {
     Some(Motion {
         steps: (bits & 0xFFFF) as u32,
         depth: (bits >> 16 & 0xFFFF) as u32,
-        shape: match bits >> 32 & 0b11 {
+        every: (bits >> 36 & 0xFFFF) as u32,
+        shape: match bits >> 32 & 0xF {
             1 => Shape::Fall,
             2 => Shape::Swing,
             3 => Shape::Scatter,
+            4 => Shape::Walk,
             _ => Shape::Rise,
         },
     })
 }
+
+/// The highest shape number [`unpack_motion`] knows by name.
+///
+/// Kept beside the match it belongs to: a shape added there and not here would
+/// arrive as `Rise` from every caller, silently.
+const LAST_SHAPE: u32 = 4;
 
 /// Builds a preview of the loop `params` describes.
 ///
@@ -321,33 +338,53 @@ mod tests {
         // The one place this can go wrong silently: a field that overlaps its
         // neighbour comes back as a plausible-looking grid rather than as an
         // error, and the loop plays a pattern nobody asked for.
-        for shape in [Shape::Rise, Shape::Fall, Shape::Swing, Shape::Scatter] {
-            for (steps, depth) in [(1u32, 0u32), (4, 3), (64, 7), (4096, 4095)] {
+        for shape in [
+            Shape::Rise,
+            Shape::Fall,
+            Shape::Swing,
+            Shape::Scatter,
+            Shape::Walk,
+        ] {
+            for (steps, depth, every) in [
+                (1u32, 0u32, 1u32),
+                (4, 3, 2),
+                (64, 7, 16),
+                (4096, 4095, 4096),
+            ] {
                 let number = match shape {
                     Shape::Rise => 0,
                     Shape::Fall => 1,
                     Shape::Swing => 2,
                     Shape::Scatter => 3,
+                    Shape::Walk => 4,
                 };
-                let there = pack_motion(true, steps, depth, number);
+                let there = pack_motion(true, steps, depth, every, number);
                 let back = unpack_motion(there).expect("a motion went in");
-                assert_eq!(back.steps, steps, "{shape:?} {steps}/{depth}");
-                assert_eq!(back.depth, depth, "{shape:?} {steps}/{depth}");
-                assert_eq!(back.shape, shape, "{shape:?} {steps}/{depth}");
+                assert_eq!(back.steps, steps, "{shape:?} {steps}/{depth}/{every}");
+                assert_eq!(back.depth, depth, "{shape:?} {steps}/{depth}/{every}");
+                assert_eq!(back.every, every, "{shape:?} {steps}/{depth}/{every}");
+                assert_eq!(back.shape, shape, "{shape:?} {steps}/{depth}/{every}");
             }
         }
 
-        assert_eq!(unpack_motion(pack_motion(false, 8, 3, 0)), None, "off");
-        assert_eq!(unpack_motion(pack_motion(true, 0, 3, 0)), None, "no grid");
+        assert_eq!(unpack_motion(pack_motion(false, 8, 3, 1, 0)), None, "off");
+        assert_eq!(unpack_motion(pack_motion(true, 0, 3, 1, 0)), None, "no grid");
 
         // A depth wider than the loop is clamped, not wrapped. Wrapped, it
         // would come back as a tiny depth and look like a working control.
-        let wide = unpack_motion(pack_motion(true, 4, 99, 0)).expect("a motion went in");
+        let wide = unpack_motion(pack_motion(true, 4, 99, 1, 0)).expect("a motion went in");
         assert_eq!(wide.depth, 3);
+
+        // A rate of zero would be a division by it; slower than the loop is one
+        // move per pass, which is no motion with extra steps.
+        let none = unpack_motion(pack_motion(true, 4, 1, 0, 0)).expect("a motion went in");
+        assert_eq!(none.every, 1);
+        let slow = unpack_motion(pack_motion(true, 4, 1, 999, 0)).expect("a motion went in");
+        assert_eq!(slow.every, 4);
 
         // An unknown shape is the first one rather than a panic on the audio
         // thread — this is a control surface, not a parser.
-        let odd = unpack_motion(pack_motion(true, 4, 1, 77)).expect("a motion went in");
+        let odd = unpack_motion(pack_motion(true, 4, 1, 1, 77)).expect("a motion went in");
         assert_eq!(odd.shape, Shape::Rise);
     }
 
@@ -366,7 +403,7 @@ mod tests {
         // during a pass" rather than "at the end of one": the pattern returns
         // to zero displacement once per cycle, and the first version of this
         // test happened to stop exactly there and called it a broken control.
-        handle.set_motion(true, 4, 3, 0);
+        handle.set_motion(true, 4, 3, 1, 0);
         let mut furthest = 0.0f64;
         for _ in 0..(8 * BAR / 256 + 4) {
             handle.read(&mut out);
@@ -377,7 +414,7 @@ mod tests {
             "the audio never left the clock; furthest was {furthest}",
         );
 
-        handle.set_motion(false, 4, 3, 0);
+        handle.set_motion(false, 4, 3, 1, 0);
         for _ in 0..8 {
             handle.read(&mut out);
         }

@@ -220,10 +220,10 @@ class CutterScreenTest {
         // line that sits directly under the waveform. Comparing raw bounds
         // against the VARISPEED header does not work: a node scrolled out of
         // view reports zero, which would pass for the wrong reason.
-        compose.onNodeWithText("speed").assertIsDisplayed()
+        compose.onNodeWithText("semitones").assertIsDisplayed()
         compose.onNodeWithText("drag a marker", substring = true).assertIsDisplayed()
 
-        val pitch = compose.onNodeWithText("speed").getBoundsInRoot()
+        val pitch = compose.onNodeWithText("semitones").getBoundsInRoot()
         val hint = compose.onNodeWithText("drag a marker", substring = true).getBoundsInRoot()
         assertTrue("pitch at ${pitch.top}, hint at ${hint.top}", pitch.top > hint.top)
 
@@ -273,12 +273,15 @@ class CutterScreenTest {
     }
 
     @Test
-    fun the_typed_tempo_rides_the_row_of_the_speed_it_sets() {
-        // It was a full-width Material field under the slider: a floating label,
-        // a 56 dp minimum and most of a thumb's height of air around four
-        // characters — on the one screen whose entire layout exists so that the
-        // waveform never has to move. The number you type and the number it
-        // produces are one fact, so they share a line.
+    fun both_units_sit_behind_their_own_buttons_on_one_row() {
+        // It was a button row and a readout row: two lines of a screen whose
+        // whole layout exists to keep the waveform in sight, with the number you
+        // type a slider away from the number it makes. Now each mode's button
+        // carries its own value immediately behind it, and the two share a line.
+        //
+        // The earlier rule — the field is a quarter of the strip — is gone with
+        // that layout. It measured a field that had a row to itself; this one
+        // shares the row with two buttons and the other unit's readout.
         val raw = EngineTest.wav(bars = 8)
         val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
         val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
@@ -300,32 +303,75 @@ class CutterScreenTest {
             }
         }
 
+        val semitones = compose.onNodeWithText("semitones").getBoundsInRoot()
+        val target = compose.onNodeWithText("target BPM").getBoundsInRoot()
         val field = compose.onNodeWithTag("tempoField").getBoundsInRoot()
-        val speed = compose.onNodeWithText("speed").getBoundsInRoot()
+        val readout = compose.onNodeWithText("st", substring = true).getBoundsInRoot()
 
-        // Same line: the two boxes overlap vertically. Nothing that sits under
-        // the slider can satisfy this.
-        assertTrue(
-            "field ${field.top}..${field.bottom}, speed ${speed.top}..${speed.bottom}",
-            field.top < speed.bottom && speed.top < field.bottom,
-        )
+        // One row: all four overlap vertically.
+        for ((what, bounds) in listOf("target" to target, "field" to field, "st" to readout)) {
+            assertTrue(
+                "$what at ${bounds.top}..${bounds.bottom}, semitones at " +
+                    "${semitones.top}..${semitones.bottom}",
+                bounds.top < semitones.bottom && semitones.top < bounds.bottom,
+            )
+        }
 
-        // A quarter of the strip it sits in — measured against the strip, not
-        // against what the readout left over. A field sized by the leftovers
-        // changes width as the readout does, which is every drag of the slider.
-        val strip = compose.onNodeWithTag("varispeed").getBoundsInRoot()
-        val width = field.right - field.left
-        val quarter = (strip.right - strip.left) / 4
+        // And each value is behind its own button, not the other one's.
         assertTrue(
-            "field is $width, a quarter of the strip is $quarter",
-            (width - quarter).value.absoluteValue < 2f,
+            "the semitone readout at ${readout.left} is not behind its button " +
+                "at ${semitones.right}",
+            readout.left >= semitones.right,
         )
+        assertTrue(
+            "the tempo field at ${field.left} is not behind its button at ${target.right}",
+            field.left >= target.right,
+        )
+        // target BPM is pushed to the right-hand end, which is what makes the
+        // row read as two pairs rather than as a queue.
+        assertTrue(
+            "target BPM starts at ${target.left}, semitones ends at ${semitones.right}",
+            (target.left - semitones.right).value > 40f,
+        )
+    }
 
-        // And it is at the right-hand end of that strip, not floating mid-row.
-        assertTrue(
-            "field ends at ${field.right}, the strip at ${strip.right}",
-            (strip.right - field.right).value.absoluteValue < 2f,
-        )
+    @Test
+    fun folding_the_lanes_halves_the_picture_and_keeps_the_file() {
+        // A view, not a setting: the same file, the same cut, half the height —
+        // and on a phone that half is the difference between reading the plan
+        // and scrolling for it.
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+        val plan = Engine.plan(org.loopslcr.Native.direct(raw), "200 loop.wav", Settings())
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                CutterScreen(
+                    loaded = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks),
+                    settings = Settings(),
+                    plan = plan,
+                    busy = Busy.Idle,
+                    problem = null,
+                    onOpen = {},
+                    onExport = {},
+                    onChange = {},
+                    onDismissProblem = {},
+                )
+            }
+        }
+
+        val tall = compose.onNodeWithTag("wave").getBoundsInRoot()
+        compose.onNodeWithTag("lanes").performClick()
+        compose.waitForIdle()
+        val short = compose.onNodeWithTag("wave").getBoundsInRoot()
+
+        val was = tall.bottom - tall.top
+        val now = short.bottom - short.top
+        assertTrue("$was tall before, $now after", now < was * 0.7f)
+        // Still the same file underneath, which is the half of "a view" that a
+        // height check cannot see.
+        compose.onNodeWithText(name).assertExists()
     }
 
     @Test
@@ -394,15 +440,15 @@ class CutterScreenTest {
             compose.waitForIdle()
         }
 
-        compose.onNodeWithText("speed").assertIsDisplayed()
-        val before = compose.onNodeWithText("speed").getBoundsInRoot()
+        compose.onNodeWithText("semitones").assertIsDisplayed()
+        val before = compose.onNodeWithText("semitones").getBoundsInRoot()
 
         // Scroll the lower half to its end, which is as far as it can go.
         compose.onNodeWithText("Export").performScrollTo()
         compose.waitForIdle()
 
-        compose.onNodeWithText("speed").assertIsDisplayed()
-        assertEquals(before.top, compose.onNodeWithText("speed").getBoundsInRoot().top)
+        compose.onNodeWithText("semitones").assertIsDisplayed()
+        assertEquals(before.top, compose.onNodeWithText("semitones").getBoundsInRoot().top)
     }
 
     @Test

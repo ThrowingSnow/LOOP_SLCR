@@ -137,7 +137,7 @@ enum class SpeedMode { Semitones, TargetBpm }
  * The order is the wire format — the native side takes the ordinal — so these
  * may be added to at the end and not reordered.
  */
-enum class MotionShape { Rise, Fall, Swing, Scatter }
+enum class MotionShape { Rise, Fall, Swing, Scatter, Walk }
 
 /**
  * The stepped displacement of the play head. A way of *listening* to the loop.
@@ -160,6 +160,16 @@ data class MotionSettings(
     val perBar: Int = 4,
     /** How far a jump may reach, in pieces. */
     val depth: Int = 1,
+    /**
+     * How often a move happens, as moves per bar.
+     *
+     * Kept in the same unit as [perBar] rather than in pieces, so the two
+     * controls read against each other — "landings every half beat, moving once
+     * a bar" — and so the rate cannot fall between two beats whatever the loop
+     * turns out to be. Coarser than the grid, or equal to it; never finer,
+     * because a move without a piece to land on is not a thing this can mean.
+     */
+    val ratePerBar: Int = 1,
     val shape: MotionShape = MotionShape.Rise,
 ) {
     /** How the grid divides a loop of [bars] bars, or null when there is no loop. */
@@ -167,6 +177,18 @@ data class MotionSettings(
         if (bars == null || bars <= 0 || perBar <= 0) return null
         return (bars * perBar).toInt()
     }
+
+    /**
+     * How many pieces pass between moves.
+     *
+     * Both numbers are per bar, so this is their ratio — and because the rate is
+     * never finer than the grid it is a whole number of pieces, which is what
+     * keeps every move on the grid it was promised.
+     */
+    fun every(): Int = (perBar / ratePerBar.coerceAtLeast(1)).coerceAtLeast(1)
+
+    /** The rate's name, in the same words the grid uses. */
+    fun rateName(sig: String): String = gridName(ratePerBar, sig)
 
     /** What the division is called, given a time signature like `4/4`. */
     fun gridName(sig: String): String = gridName(perBar, sig)

@@ -360,7 +360,8 @@ pub extern "system" fn Java_org_loopslcr_Native_previewSetRatio<'a>(
     })
 }
 
-/// `previewSetMotion(long handle, boolean on, int steps, int depth, int shape)`.
+/// `previewSetMotion(long handle, boolean on, int steps, int depth, int every,
+/// int shape)`.
 ///
 /// Lock-free; safe from any thread. Takes effect at the next step boundary, so
 /// turning a control while the loop plays does not click.
@@ -375,6 +376,7 @@ pub extern "system" fn Java_org_loopslcr_Native_previewSetMotion<'a>(
     on: jboolean,
     steps: jint,
     depth: jint,
+    every: jint,
     shape: jint,
 ) {
     guard(&mut env, (), |_| {
@@ -382,6 +384,7 @@ pub extern "system" fn Java_org_loopslcr_Native_previewSetMotion<'a>(
             on != 0,
             steps.max(0) as u32,
             depth.max(0) as u32,
+            every.max(0) as u32,
             shape.max(0) as u32,
         );
         Ok(())

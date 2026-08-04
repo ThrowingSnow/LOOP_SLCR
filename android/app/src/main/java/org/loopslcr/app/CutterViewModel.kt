@@ -217,10 +217,10 @@ class CutterViewModel : ViewModel() {
         val m = _motion.value
         val steps = m.steps(_plan.value?.bars)
         if (steps == null) {
-            player.setMotion(false, 0, 0, 0)
+            player.setMotion(false, 0, 0, 1, 0)
             return
         }
-        player.setMotion(m.on, steps, m.depth, m.shape.ordinal)
+        player.setMotion(m.on, steps, m.depth, m.every(), m.shape.ordinal)
     }
 
     /**

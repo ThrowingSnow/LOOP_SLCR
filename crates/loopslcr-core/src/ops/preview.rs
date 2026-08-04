@@ -78,7 +78,17 @@ pub enum Shape {
     /// Up and back down again. Nothing repeats twice in a row at the turn.
     Swing,
     /// Scattered, but the *same* scatter every time round.
+    ///
+    /// Each move is independent of the last, so it lurches: the interesting
+    /// shape when the point is that you cannot predict the next piece.
     Scatter,
+    /// A random walk: each move is a step away from the one before.
+    ///
+    /// Also the same every time round. The difference from [`Scatter`] is
+    /// audible and is the whole reason it exists — neighbouring pieces stay
+    /// near each other, so it wanders through the loop instead of shuffling it,
+    /// and a phrase survives being moved.
+    Walk,
 }
 
 /// A stepped displacement of the play head that always lands on the grid.
@@ -119,6 +129,17 @@ pub struct Motion {
     pub steps: u32,
     /// How far a displacement may reach, in pieces.
     pub depth: u32,
+    /// How many pieces pass between one move and the next.
+    ///
+    /// The grid says where a jump may *land*; this says how often it happens.
+    /// They were one control to begin with, which meant asking for a fine
+    /// landing grid also asked for a frantic rate — half-beat resolution could
+    /// only ever be heard as a half-beat stutter.
+    ///
+    /// It is counted in pieces rather than in milliseconds, which is what makes
+    /// the rate beat-synced by construction: there is no number here that can
+    /// put a move between two beats. One means every piece.
+    pub every: u32,
     pub shape: Shape,
 }
 
@@ -130,7 +151,15 @@ pub struct Motion {
 pub const JUMP_FADE_MS: f64 = 4.0;
 
 impl Motion {
-    /// The displacement for step `index`, in steps.
+    /// Which move a piece index belongs to.
+    ///
+    /// Pieces inside one move share a slot, so the displacement does not change
+    /// under them — that is what a rate coarser than the grid *is*.
+    pub fn slot(&self, index: u64) -> u64 {
+        index / u64::from(self.every.max(1))
+    }
+
+    /// The displacement for move `slot`, in pieces.
     ///
     /// Deliberately total: a depth of zero gives zero everywhere rather than a
     /// division by zero, and any index works, including one past the end.
@@ -156,14 +185,43 @@ impl Motion {
             // A hash rather than a generator: same index, same answer, forever.
             // Splitmix64's finaliser, which scatters adjacent integers well and
             // is four lines rather than a dependency.
-            Shape::Scatter => {
-                let mut x = index.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-                x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-                x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-                (x ^ (x >> 31)) % span
+            Shape::Scatter => hash(index) % span,
+            // Walked from the beginning rather than carried in a field, so it
+            // stays a pure function of the index — the property the whole
+            // feature rests on. It costs `index` iterations, at most once per
+            // move rather than once per sample, on an index that resets every
+            // time round the loop.
+            Shape::Walk => {
+                let mut at = 0i64;
+                let span = span as i64;
+                for i in 0..=index {
+                    // Reflected at the ends rather than wrapped. A wrap would
+                    // teleport from one edge of the reach to the other, which
+                    // is the lurch this shape exists not to do.
+                    let step = if hash(i) & 1 == 0 { 1 } else { -1 };
+                    at += step;
+                    if at < 0 {
+                        at = 1.min(span - 1);
+                    } else if at >= span {
+                        at = (span - 2).max(0);
+                    }
+                }
+                at as u64
             }
         }
     }
+}
+
+/// Splitmix64's finaliser: same input, same answer, forever.
+///
+/// A hash rather than a generator, and that is the point — a generator would
+/// answer differently on the second pass through the loop, which is exactly
+/// what must not happen. Four lines rather than a dependency.
+fn hash(index: u64) -> u64 {
+    let mut x = index.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
 }
 
 /// A loop, playing.
@@ -382,10 +440,14 @@ impl Preview {
             // pattern would wander instead of repeating.
             if let Some(motion) = self.motion {
                 if step_frames > 0.0 {
-                    let index = (self.position / step_frames) as u64;
-                    if index != self.step {
-                        self.step = index;
-                        self.jump_to(motion.offset(index) as f64 * step_frames);
+                    // The *slot*, not the piece: with a rate coarser than the
+                    // grid, several pieces pass without a move, and the jump
+                    // still lands on a piece because the displacement is
+                    // counted in pieces.
+                    let slot = motion.slot((self.position / step_frames) as u64);
+                    if slot != self.step {
+                        self.step = slot;
+                        self.jump_to(motion.offset(slot) as f64 * step_frames);
                     }
                 }
             }
@@ -634,11 +696,12 @@ mod tests {
         // A first pass identical to the rest would mean pretending audio had
         // been playing before it started. So the period is checked where a
         // period is a meaningful idea — between two consecutive later passes.
-        for shape in [Shape::Rise, Shape::Fall, Shape::Swing, Shape::Scatter] {
+        for shape in [Shape::Rise, Shape::Fall, Shape::Swing, Shape::Scatter, Shape::Walk] {
             let mut preview = Preview::new(sine(4800), 0.0);
             preview.set_motion(Some(Motion {
                 steps: 8,
                 depth: 3,
+                every: 1,
                 shape,
             }));
 
@@ -675,6 +738,7 @@ mod tests {
         preview.set_motion(Some(Motion {
             steps,
             depth: 3,
+            every: 1,
             shape: Shape::Rise,
         }));
 
@@ -717,6 +781,7 @@ mod tests {
         preview.set_motion(Some(Motion {
             steps,
             depth: 5,
+            every: 1,
             shape: Shape::Scatter,
         }));
 
@@ -740,6 +805,7 @@ mod tests {
         preview.set_motion(Some(Motion {
             steps: 8,
             depth: 7,
+            every: 1,
             shape: Shape::Rise,
         }));
 
@@ -778,6 +844,7 @@ mod tests {
         let moved = biggest_step(Some(Motion {
             steps: 8,
             depth: 3,
+            every: 1,
             shape: Shape::Scatter,
         }));
 
@@ -796,6 +863,7 @@ mod tests {
         preview.set_motion(Some(Motion {
             steps: 4,
             depth: 3,
+            every: 1,
             shape: Shape::Rise,
         }));
         let mut out = vec![0.0f32; 2400 * 2];
@@ -819,6 +887,7 @@ mod tests {
         idle.set_motion(Some(Motion {
             steps: 8,
             depth: 0,
+            every: 1,
             shape: Shape::Scatter,
         }));
 
@@ -835,6 +904,7 @@ mod tests {
         preview.set_motion(Some(Motion {
             steps: 0,
             depth: 4,
+            every: 1,
             shape: Shape::Rise,
         }));
         assert_eq!(preview.motion(), None);
@@ -849,10 +919,11 @@ mod tests {
         // Which is what makes the loop repeat. Asked twice for the same index,
         // every shape has to answer the same thing — including the scattered
         // one, whose whole trick is being a hash rather than a generator.
-        for shape in [Shape::Rise, Shape::Fall, Shape::Swing, Shape::Scatter] {
+        for shape in [Shape::Rise, Shape::Fall, Shape::Swing, Shape::Scatter, Shape::Walk] {
             let motion = Motion {
                 steps: 16,
                 depth: 4,
+                every: 1,
                 shape,
             };
             for index in 0..64u64 {
@@ -868,6 +939,7 @@ mod tests {
         let rise = Motion {
             steps: 16,
             depth: 3,
+            every: 1,
             shape: Shape::Rise,
         };
         assert_eq!(
@@ -878,6 +950,7 @@ mod tests {
         let swing = Motion {
             steps: 16,
             depth: 2,
+            every: 1,
             shape: Shape::Swing,
         };
         assert_eq!(
@@ -887,12 +960,106 @@ mod tests {
     }
 
     #[test]
+    fn a_rate_coarser_than_the_grid_moves_less_often_and_still_on_the_grid() {
+        // The grid says where a jump may *land*; the rate says how often one
+        // happens. They were one control, which meant asking for half-beat
+        // landings also asked for a half-beat stutter — the fine resolution was
+        // unusable at any musical rate.
+        let frames = 4800usize;
+        let steps = 16u32;
+        let piece = frames as f64 / steps as f64;
+
+        let moves = |every: u32| {
+            let mut preview = Preview::new(sine(frames), 0.0);
+            preview.set_motion(Some(Motion {
+                steps,
+                depth: 3,
+                every,
+                shape: Shape::Scatter,
+            }));
+            let mut out = vec![0.0f32; 2];
+            let mut seen = Vec::new();
+            let mut last = f64::NAN;
+            for _ in 0..frames {
+                preview.read(&mut out);
+                if preview.displacement != last {
+                    last = preview.displacement;
+                    seen.push(last);
+                }
+            }
+            seen
+        };
+
+        let fine = moves(1);
+        let coarse = moves(4);
+        assert!(
+            coarse.len() * 2 < fine.len(),
+            "every piece: {} moves, every fourth: {}",
+            fine.len(),
+            coarse.len(),
+        );
+
+        // And a coarser rate does not buy the fine grid away: the landings are
+        // still whole pieces of it, which is the point of separating the two.
+        for displacement in coarse {
+            let pieces = displacement / piece;
+            assert!(
+                (pieces - pieces.round()).abs() < 1e-9,
+                "landed {pieces} pieces along",
+            );
+        }
+    }
+
+    #[test]
+    fn the_walk_wanders_where_the_scatter_lurches() {
+        // The difference between the two random shapes, and the reason both
+        // exist. Neighbouring moves of a walk stay near each other — a phrase
+        // survives being moved — while a scatter is free to leap the whole
+        // reach every time.
+        let walk = Motion {
+            steps: 64,
+            depth: 7,
+            every: 1,
+            shape: Shape::Walk,
+        };
+        let scatter = Motion {
+            shape: Shape::Scatter,
+            ..walk
+        };
+
+        let jumpiness = |m: Motion| {
+            (1..64u64)
+                .map(|i| (m.offset(i) as i64 - m.offset(i - 1) as i64).abs())
+                .sum::<i64>() as f64
+                / 63.0
+        };
+
+        let walked = jumpiness(walk);
+        let scattered = jumpiness(scatter);
+        assert!(
+            (walked - 1.0).abs() < 1e-9,
+            "a walk moved by {walked} pieces on average, not one",
+        );
+        assert!(
+            scattered > walked * 2.0,
+            "walk {walked}, scatter {scattered} — they are the same shape",
+        );
+
+        // Still inside the reach, and still the same every time round.
+        for i in 0..200u64 {
+            assert!(walk.offset(i) <= 7, "reached {} of 7", walk.offset(i));
+            assert_eq!(walk.offset(i), walk.offset(i));
+        }
+    }
+
+    #[test]
     fn the_scattered_shape_actually_scatters() {
         // A hash that returned a constant would pass every determinism test in
         // this file and be nothing at all.
         let motion = Motion {
             steps: 32,
             depth: 7,
+            every: 1,
             shape: Shape::Scatter,
         };
         let seen: std::collections::BTreeSet<u64> = (0..32).map(|i| motion.offset(i)).collect();

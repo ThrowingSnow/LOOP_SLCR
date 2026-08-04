@@ -100,6 +100,8 @@ fun Waveform(
     samplesPerBar: Double? = null,
     /** Called while a marker is dragged, with its new position as a fraction. */
     onDrag: ((Marker, Float) -> Unit)? = null,
+    /** Draw both channels into one lane, which buys back half the height. */
+    folded: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     // Read inside the gesture without keying the handler on it: the region moves
@@ -213,9 +215,14 @@ fun Waveform(
 
         gridLines(frames, samplesPerBar, left, zoom)
 
-        val laneHeight = size.height / channels
-        for (channel in 0 until channels) {
-            val top = laneHeight * channel
+        // One lane or one per channel. Folded, the lane is the *envelope* of
+        // both channels — the lowest low and the highest high — not their sum:
+        // a sum cancels wherever the two disagree, which would draw a quiet
+        // passage over material that is merely wide.
+        val lanes = if (folded) 1 else channels
+        val laneHeight = size.height / lanes
+        for (lane in 0 until lanes) {
+            val top = laneHeight * lane
             val mid = top + laneHeight / 2f
             val scale = laneHeight / 2f
 
@@ -228,9 +235,15 @@ fun Waveform(
             val firstBucket = (left * buckets).toInt().coerceIn(0, buckets - 1)
             val lastBucket = ((left + 1f / zoom) * buckets).toInt().coerceIn(0, buckets - 1)
             for (i in firstBucket..lastBucket) {
-                val base = (i * channels + channel) * 2
-                val low = peaks[base].coerceIn(-1f, 1f)
-                val high = peaks[base + 1].coerceIn(-1f, 1f)
+                var low = 1f
+                var high = -1f
+                val from = if (folded) 0 else lane
+                val to = if (folded) channels - 1 else lane
+                for (channel in from..to) {
+                    val base = (i * channels + channel) * 2
+                    low = minOf(low, peaks[base].coerceIn(-1f, 1f))
+                    high = maxOf(high, peaks[base + 1].coerceIn(-1f, 1f))
+                }
                 val px = x(i.toFloat() / buckets)
                 // A silent bucket would otherwise draw nothing at all, and a gap
                 // in the line reads as missing data rather than as silence.

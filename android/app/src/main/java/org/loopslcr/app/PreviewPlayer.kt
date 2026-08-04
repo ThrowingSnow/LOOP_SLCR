@@ -188,9 +188,9 @@ class PreviewPlayer {
      * to the loop, so it costs nothing to turn and takes effect on the next
      * step boundary.
      */
-    fun setMotion(on: Boolean, steps: Int, depth: Int, shape: Int) {
+    fun setMotion(on: Boolean, steps: Int, depth: Int, every: Int, shape: Int) {
         if (handle != 0L) {
-            runCatching { Native.previewSetMotion(handle, on, steps, depth, shape) }
+            runCatching { Native.previewSetMotion(handle, on, steps, depth, every, shape) }
         }
     }
 
