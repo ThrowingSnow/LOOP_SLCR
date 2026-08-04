@@ -1557,3 +1557,51 @@ weder Datei noch Schnitt ändern sich, nur 84 dp statt 150.
 Gefaltet zeigt die Spur die **Hüllkurve** beider Kanäle, nicht ihre Summe: eine
 Summe löscht sich überall dort aus, wo die Kanäle sich widersprechen, und würde
 eine leise Stelle über Material zeichnen, das bloß breit ist.
+
+## 37. Zwei Loops auf einem Lesekopf
+
+Gewünscht: ein zweiter Drumloop, zwischen dessen Chops ein LFO hin- und
+herschaltet — „aber immer an einer richtig gesyncten Position".
+
+Gebaut als **geteilte Phase, nicht als Synchronisation**, und darin steckt der
+ganze Entwurf. Es gibt nur einen Lesekopf; der Wechsel ändert allein, *aus
+welchem Puffer* gelesen wird. Takt drei des einen wird von Takt vier des anderen
+gefolgt, im Takt, ohne dass irgendetwas neu getriggert würde.
+
+Zwei Uhren, die man im Gleichschritt hält, sind etwas, das auseinanderlaufen
+kann — und ein Versatz von ein paar Samples pro Durchlauf ist genau das
+Artefakt, dessen Beseitigung der Sinn dieses Werkzeugs ist. **Eine Uhr kann
+nicht von sich selbst abweichen.**
+
+### Warum die Länge nicht verhandelbar ist
+
+Ein Partner anderer Länge hat keine geteilte Phase, an der er gelesen werden
+könnte. Also wird er **abgelehnt statt gedehnt** — Dehnen an dieser Stelle würde
+still die Exaktheit aufheben, auf der alles andere steht.
+
+Möglich ist die Anpassung überhaupt nur, weil beide Tempi exakt bekannt sind:
+der zweite Loop wird auf die Taktzahl des ersten geschnitten und mit derselben
+exakten Rationalarithmetik auf dessen Tempo gezogen wie jeder andere Schnitt.
+Wo das nicht geht — kein deklariertes Tempo, andere Samplerate —, erscheint die
+Ablehnung in CUTTER 2, **mit beiden Frame-Zahlen darin**. „Anderer Länge" allein
+lässt den Benutzer ohne etwas, das er ändern könnte.
+
+### CUTTER 2 ist absichtlich kein zweiter Cutter
+
+Kein Varispeed, kein Export — er hat keine eigene Länge. Ihm ein Tempo zu geben
+hieße anzubieten, genau die Eigenschaft zu brechen, die das Paar trägt. Was er
+hat, sind die beiden Entscheidungen, die wirklich seine sind: welcher Teil der
+Datei, und wie er gelesen wird.
+
+### Eine Blende für zwei Ereignisse
+
+Fallen ein Sprung (Motion) und ein Wechsel (Swap) auf dieselbe Rasterkante, gibt
+es dort **eine** Unstetigkeit. Zwei überlappende Blenden würden jede nur die
+Hälfte davon verdecken, deshalb merkt sich `begin_fade` einmal, was verlassen
+wird — Seite *und* Versatz.
+
+### Ein ungerader Zyklus wird gesagt, nicht verhindert
+
+Teilt `holdA + holdB` den Loop nicht, kommt die letzte Wendung vor der Naht kurz
+heraus. Der Loop wiederholt sich trotzdem exakt, weil die Zählung mit ihm neu
+beginnt — es ist eine musikalische Wahl, kein Fehler. Also steht es da.

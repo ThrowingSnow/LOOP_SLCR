@@ -401,9 +401,12 @@ worth exactly as much as its regression check.
   - [x] `walk` shape: a random walk rather than an independent scatter
   - [ ] Bake the motion into an export (needs the displacement in exact
         rational frames, not the preview's floats)
-  - [ ] **A second loop, and an LFO that switches between the two** — one
-        shared phase, the swap on a grid boundary, so both stay in time.
-        Wants CUTTER 1 / CUTTER 2 tabs and a second file in the view model
+  - [x] **A second loop, and a swap between the two** — one shared play head,
+        the swap on a grid boundary, so both stay in time with nothing to
+        synchronise. CUTTER 1 / CUTTER 2, and a partner of the wrong length
+        refused with both frame counts rather than stretched
+  - [ ] Export the pair (needs the swap in exact rational frames, like the
+        motion, and a decision about what a two-loop file even is)
   - [ ] Draggable play head (seek exists; nothing drives it from the waveform yet)
 - [x] Dark theme
 - [x] Instrumented tests: the engine on a real Android runtime, the screen rendered
