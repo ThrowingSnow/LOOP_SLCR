@@ -1304,3 +1304,36 @@ dem Ziehen und der eigenen Anzeige eine Debounce. Dieselbe Regel wie bei den
 Markern: *ein lebendes Bedienelement folgt dem Finger, nicht der Pipeline.* Im
 Zieltempo-Modus ist es umgekehrt richtig, weil die Halbtöne dort abgeleitet sind
 und es gar keine Einstellung gibt, die man anzeigen könnte.
+
+## 29. Der Kopf bleibt stehen
+
+Gemeldet als Einfall: „die Waveform und der Pitch/BPM-Regler sollten fix im Bild
+bleiben, ab dort ein scrollbares Menü — damit man immer sieht, was sich gerade
+ändert."
+
+Genau richtig, und es war der eigentliche Rest des Problems. Der ganze Bildschirm
+scrollte als ein Stück, also schob jedes Bedienelement, das man erreichen wollte,
+das Bild weg, auf das es wirkt: man konnte die Sache ändern **oder** ansehen, nie
+beides. Das Falten der Gruppen hat geholfen und es nicht behoben — eine lange
+genug Liste scrollt den Kopf trotzdem hinaus.
+
+Jetzt zwei Teile: oben festgesetzt Kopfzeile, Waveform und Varispeed; darunter
+genau ein Scroll-Container mit allem, was den Schnitt nur *beschreibt*.
+
+**Und der verschwundene BPM-Regler.** Er hing an `plan?.tempo`, und der Plan ist
+null, bevor der erste ankommt und wieder, sobald die Einstellungen keinen Schnitt
+beschreiben — also war das Bedienelement in genau diesen Momenten weg, ohne ein
+Wort dazu. Das Tempo der Datei stand die ganze Zeit daneben und ist ein völlig
+brauchbarer Rückfall. Gibt es wirklich keins (14 der 279 Archivdateien), steht
+jetzt dort, warum: „half as fast" braucht etwas, wovon es die Hälfte sein kann.
+
+**Zwei Lektionen aus den Tests dieser Runde**, beide unangenehm:
+
+- Mein erster Sticky-Test war **wertlos**. Er verglich zwei getrennte
+  Scroll-Container, was ohnehin nie fehlschlagen konnte. Der ehrliche
+  Gegenversuch ist die *eine* scrollende Spalte von vorher — und dagegen lief er
+  trotzdem durch, weil bei zugeklappten Gruppen der Inhalt aufs Display passt und
+  es schlicht nichts zu scrollen gibt. Erst nachdem der Test alle Gruppen selbst
+  aufklappt, fängt er die Regression: `'speed' is not displayed`.
+- Ein Test, der gegen den Fehler nicht scheitert, ist kein Test, sondern eine
+  Behauptung mit Zeremonie. Zweimal in einer Runde beinahe eine abgeliefert.

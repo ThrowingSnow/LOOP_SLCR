@@ -8,13 +8,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onRoot
 import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -266,6 +269,83 @@ class CutterScreenTest {
 
         compose.onNodeWithText("90").assertExists()
         compose.onNodeWithText("150").assertDoesNotExist()
+    }
+
+    @Test
+    fun the_target_bpm_slider_is_there_even_before_the_first_plan() {
+        // Reported as "I switch to BPM and there is no slider". It hung on
+        // `plan?.tempo`, and the plan is null before the first one lands and
+        // again whenever the settings do not describe a cut — so the control
+        // vanished, with nothing said. The file's own tempo is a perfectly good
+        // answer and was sitting right there.
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                CutterScreen(
+                    loaded = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks),
+                    settings = Settings(speedMode = SpeedMode.TargetBpm),
+                    plan = null,
+                    busy = Busy.Idle,
+                    problem = null,
+                    onOpen = {},
+                    onExport = {},
+                    onChange = {},
+                    onDismissProblem = {},
+                )
+            }
+        }
+
+        // 200 BPM from the name, so the span is 100..400 and the slider stands.
+        compose.onNodeWithTag("bpmSlider").assertExists()
+        compose.onNodeWithText("no source tempo yet", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun the_waveform_and_the_varispeed_do_not_scroll_away() {
+        // The whole screen used to scroll as one, so reaching any control
+        // pushed the picture it acted on off the top: you could change the
+        // thing or watch it, never both.
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+        val plan = Engine.plan(org.loopslcr.Native.direct(raw), "200 loop.wav", Settings())
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                CutterScreen(
+                    loaded = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks),
+                    settings = Settings(),
+                    plan = plan,
+                    busy = Busy.Idle,
+                    problem = null,
+                    onOpen = {},
+                    onExport = {},
+                    onChange = {},
+                    onDismissProblem = {},
+                )
+            }
+        }
+
+        // Open every group first. With everything folded the screen fits on an
+        // emulator, so there is nothing to scroll and the test cannot tell the
+        // layouts apart — it passed against the old one until this was added.
+        for (group in listOf("SOURCE", "LOOP", "TAPE", "OUTPUT")) {
+            compose.onNodeWithText(group).performClick()
+            compose.waitForIdle()
+        }
+
+        compose.onNodeWithText("speed").assertIsDisplayed()
+        val before = compose.onNodeWithText("speed").getBoundsInRoot()
+
+        // Scroll the lower half to its end, which is as far as it can go.
+        compose.onNodeWithText("Export").performScrollTo()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("speed").assertIsDisplayed()
+        assertEquals(before.top, compose.onNodeWithText("speed").getBoundsInRoot().top)
     }
 
     @Test

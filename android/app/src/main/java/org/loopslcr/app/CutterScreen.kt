@@ -33,6 +33,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -60,113 +61,130 @@ fun CutterScreen(
     onChange: ((Settings) -> Settings) -> Unit,
     onDismissProblem: () -> Unit,
 ) {
+    // Two parts, and the split is the point.
+    //
+    // **What you are looking at stays put.** The waveform and the varispeed are
+    // pinned; everything that only *describes* the cut scrolls beneath them. The
+    // whole screen used to scroll as one, so reaching any control pushed the
+    // picture it acted on off the top — you could change the thing or watch the
+    // thing, never both. Folding the groups helped and did not fix it, because
+    // a long enough list still scrolls the head away.
     Column(
         Modifier
             .fillMaxSize()
-            .background(Palette.background)
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .background(Palette.background),
     ) {
-        Header(loaded, busy, playing, onOpen, onPlay)
+        Column(
+            Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Header(loaded, busy, playing, onOpen, onPlay)
 
-        if (problem != null) Problem(problem, onDismissProblem)
+            if (problem != null) Problem(problem, onDismissProblem)
+
+            if (loaded != null) {
+                Panel {
+                    Waveform(
+                        peaks = loaded.peaks,
+                        channels = loaded.analysis.channels,
+                        frames = loaded.analysis.frames,
+                        region = plan?.let { it.regionStart..it.regionEnd },
+                        playHead = playHead,
+                        samplesPerBar = plan?.samplesPerBar,
+                        onDrag = onDragMarker,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(150.dp),
+                    )
+                }
+
+                // The button went to the top; the sentence stays with the
+                // waveform it describes.
+                Text(
+                    if (playing) {
+                        "the loop is playing — move the varispeed and it bends"
+                    } else {
+                        "drag a marker to move the cut — it snaps to bar lines"
+                    },
+                    color = Palette.dim,
+                    fontSize = 11.sp,
+                )
+
+                PitchStrip(settings, plan, loaded.analysis, onChange)
+            }
+        }
 
         if (loaded == null) {
-            Spacer(Modifier.height(24.dp))
-            Text(
-                "Pick a WAVE file to cut. Nothing is read until you do, and " +
-                    "nothing outside it is ever read.",
-                color = Palette.dim,
-            )
+            Column(Modifier.padding(16.dp)) {
+                Spacer(Modifier.height(24.dp))
+                Text(
+                    "Pick a WAVE file to cut. Nothing is read until you do, and " +
+                        "nothing outside it is ever read.",
+                    color = Palette.dim,
+                )
+            }
             return@Column
         }
 
-        Panel {
-            Waveform(
-                peaks = loaded.peaks,
-                channels = loaded.analysis.channels,
-                frames = loaded.analysis.frames,
-                region = plan?.let { it.regionStart..it.regionEnd },
-                playHead = playHead,
-                samplesPerBar = plan?.samplesPerBar,
-                onDrag = onDragMarker,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(150.dp),
-            )
-        }
-
-        // The button went to the top; the sentence stays with the waveform it
-        // describes.
-        Text(
-            if (playing) {
-                "the loop is playing — move the varispeed and it bends"
-            } else {
-                "drag a marker to move the cut — it snaps to bar lines"
-            },
-            color = Palette.dim,
-            fontSize = 11.sp,
-        )
-
-        PitchStrip(settings, plan, onChange)
-
-        // The file's own figures now live behind the name in [Header]; what
-        // stays on screen is what a *decision* is made from. They were three
-        // panels deep before the first control, and a screen you have to scroll
-        // past to reach the thing you came for is a screen that buried it.
-        if (plan != null) PlanCard(plan, settings, onChange)
-
-        // Folded by default where the setting is normally read off the file and
-        // left alone; open where the sliders are, because those are what the
-        // preview is for.
-        Section(
-            "Source",
-            summary = plan?.let { "${trim(it.tempo)} BPM · ${settings.sig}" },
+        Column(
+            Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            SourceControls(loaded.analysis, settings, onChange)
-        }
+            // The file's own figures live behind the name in [Header]; what is
+            // here is what a *decision* is made from.
+            if (plan != null) PlanCard(plan, settings, onChange)
 
-        Section(
-            "Loop",
-            summary = plan?.let { "${it.bars} bars from ${it.skipBars}" },
-        ) {
-            BarsRow(settings, onChange)
-            SkipRow(settings, onChange)
-            WorkflowRow(settings, plan, onChange)
-            AlignRow(settings, onChange)
-        }
-
-        Section("Tape", summary = if (settings.tape) "on" else "off") {
-            TapeControls(settings, onChange)
-        }
-
-        Section(
-            "Output",
-            summary = settings.depth + if (settings.normalize) " · normalized" else "",
-        ) {
-            DepthRow(settings, onChange)
-            Toggle("Normalize", settings.normalize) { on -> onChange { it.copy(normalize = on) } }
-            Toggle("Snap to a sample-exact tempo", settings.snap) { on -> onChange { it.copy(snap = on) } }
-            Toggle("Accept a short loop", settings.allowShort) { on -> onChange { it.copy(allowShort = on) } }
-        }
-
-        Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = onExport,
-            enabled = busy is Busy.Idle && plan != null,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (busy is Busy.Working) busy.what else "Export")
-        }
-        if (busy is Busy.Working) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(Modifier.height(16.dp).width(16.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(8.dp))
-                Text(busy.what, color = Palette.dim)
+            Section(
+                "Source",
+                summary = plan?.let { "${trim(it.tempo)} BPM · ${settings.sig}" },
+            ) {
+                SourceControls(loaded.analysis, settings, onChange)
             }
+
+            Section(
+                "Loop",
+                summary = plan?.let { "${it.bars} bars from ${it.skipBars}" },
+            ) {
+                BarsRow(settings, onChange)
+                SkipRow(settings, onChange)
+                WorkflowRow(settings, plan, onChange)
+                AlignRow(settings, onChange)
+            }
+
+            Section("Tape", summary = if (settings.tape) "on" else "off") {
+                TapeControls(settings, onChange)
+            }
+
+            Section(
+                "Output",
+                summary = settings.depth + if (settings.normalize) " · normalized" else "",
+            ) {
+                DepthRow(settings, onChange)
+                Toggle("Normalize", settings.normalize) { on -> onChange { it.copy(normalize = on) } }
+                Toggle("Snap to a sample-exact tempo", settings.snap) { on -> onChange { it.copy(snap = on) } }
+                Toggle("Accept a short loop", settings.allowShort) { on -> onChange { it.copy(allowShort = on) } }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onExport,
+                enabled = busy is Busy.Idle && plan != null,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (busy is Busy.Working) busy.what else "Export")
+            }
+            if (busy is Busy.Working) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.height(16.dp).width(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(busy.what, color = Palette.dim)
+                }
+            }
+            Spacer(Modifier.height(24.dp))
         }
-        Spacer(Modifier.height(24.dp))
     }
 }
 
@@ -630,7 +648,12 @@ private fun DepthRow(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
  * where it belongs.
  */
 @Composable
-private fun PitchStrip(s: Settings, plan: Plan?, onChange: ((Settings) -> Settings) -> Unit) {
+private fun PitchStrip(
+    s: Settings,
+    plan: Plan?,
+    analysis: Analysis,
+    onChange: ((Settings) -> Settings) -> Unit,
+) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Chip("semitones", s.speedMode == SpeedMode.Semitones) {
             onChange { it.copy(speedMode = SpeedMode.Semitones) }
@@ -642,7 +665,13 @@ private fun PitchStrip(s: Settings, plan: Plan?, onChange: ((Settings) -> Settin
 
     // The source tempo, which is what a target tempo is a ratio *of*. Without
     // it there is no honest slider range, only an invented one.
-    val source = plan?.tempo
+    //
+    // Falls back to the file's own tempo rather than the plan's alone. The plan
+    // is null before the first one lands and again whenever the settings do not
+    // describe a cut, and the slider used to simply not be there in those
+    // moments — no slider, no reason given, which is exactly the kind of silent
+    // disappearance this app keeps having to be talked out of.
+    val source = plan?.tempo ?: analysis.tempo
 
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text("speed", color = Palette.dim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
@@ -683,7 +712,7 @@ private fun PitchStrip(s: Settings, plan: Plan?, onChange: ((Settings) -> Settin
                 onChange { it.copy(semitones = snapped) }
             },
             valueRange = -12f..12f,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().testTag("semitoneSlider"),
         )
 
         SpeedMode.TargetBpm -> {
@@ -704,7 +733,19 @@ private fun PitchStrip(s: Settings, plan: Plan?, onChange: ((Settings) -> Settin
                         onChange { it.copy(targetBpm = v) }
                     },
                     valueRange = low..high,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().testTag("bpmSlider"),
+                )
+            }
+
+            if (source == null || source <= 0.0) {
+                // Said, not hidden. Fourteen of the 279 archive files carry no
+                // tempo anywhere; without one, "half as fast" has nothing to be
+                // half of, and a slider spanning invented numbers would be a
+                // worse answer than none.
+                Text(
+                    "no source tempo yet — type one under SOURCE and the slider appears",
+                    color = Palette.warn,
+                    fontSize = 11.sp,
                 )
             }
 
