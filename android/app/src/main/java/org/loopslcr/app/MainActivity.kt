@@ -133,6 +133,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         model = ViewModelProvider(this)[CutterViewModel::class.java]
 
+        // Read before the first frame, and applied before it too: an app that
+        // launched upright and then swung round would be worse than one that
+        // never offered the choice.
+        val preferences = Preferences(this)
+        val first = preferences.load()
+        requestedOrientation = first.screen.requested()
+
         setContent {
             MaterialTheme(
                 colorScheme = darkColorScheme(
@@ -178,6 +185,7 @@ class MainActivity : ComponentActivity() {
                 val gains by model.gains.collectAsState()
                 val masterDeck by model.master.collectAsState()
                 val masterGain by model.masterGain.collectAsState()
+                var display by remember { mutableStateOf(first) }
                 val calculator by model.calculator.collectAsState()
                 val sums by model.sums.collectAsState()
                 val calculatorProblem by model.calculatorProblem.collectAsState()
@@ -280,11 +288,21 @@ class MainActivity : ComponentActivity() {
                             playing = playing,
                             onGains = { a, b -> model.setGains(a, b) },
                             onMasterGain = { g -> model.setMasterGain(g) },
+                            view = display.mixer,
                         )
 
                         4 -> SettingsScreen(
                             engineVersion = Engine.version,
                             build = BuildConfig.VERSION_NAME,
+                            display = display,
+                            onDisplay = { chosen ->
+                                display = chosen
+                                preferences.save(chosen)
+                                // Applied on the spot rather than at the next
+                                // launch: a display setting you cannot see take
+                                // effect is one you cannot judge.
+                                requestedOrientation = chosen.screen.requested()
+                            },
                         )
 
                         else -> CalculatorScreen(

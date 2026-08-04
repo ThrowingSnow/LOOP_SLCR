@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -89,16 +91,26 @@ fun CutterScreen(
     // Two parts, and the split is the point.
     //
     // **What you are looking at stays put.** The waveform and the varispeed are
-    // pinned; everything that only *describes* the cut scrolls beneath them. The
-    // whole screen used to scroll as one, so reaching any control pushed the
-    // picture it acted on off the top — you could change the thing or watch the
-    // thing, never both. Folding the groups helped and did not fix it, because
-    // a long enough list still scrolls the head away.
-    Column(
+    // pinned; everything that only *describes* the cut scrolls beside or beneath
+    // them. The whole screen used to scroll as one, so reaching any control
+    // pushed the picture it acted on off the top — you could change the thing or
+    // watch the thing, never both. Folding the groups helped and did not fix it,
+    // because a long enough list still scrolls the head away.
+    //
+    // **Sideways it is the same split turned ninety degrees**: the picture takes
+    // the left half and the panels stand beside it. Measured rather than asked —
+    // `maxWidth > maxHeight` is the question the layout actually has, and it is
+    // also true of a tablet held upright with room to spare, which the device's
+    // idea of "landscape" would have got wrong.
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(Palette.background),
     ) {
+        val wide = maxWidth > maxHeight
+
+    @Composable
+    fun ColumnScope.head() {
         Column(
             Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -155,7 +167,10 @@ fun CutterScreen(
                 )
             }
         }
+    }
 
+    @Composable
+    fun ColumnScope.body(modifier: Modifier) {
         if (loaded == null) {
             Column(Modifier.padding(16.dp)) {
                 Spacer(Modifier.height(24.dp))
@@ -165,12 +180,12 @@ fun CutterScreen(
                     color = Palette.dim,
                 )
             }
-            return@Column
+            return
         }
 
         Column(
-            Modifier
-                .weight(1f)
+            modifier
+                .testTag("panels")
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             // Tighter than the pinned half above it: these are lids in a list,
@@ -253,6 +268,19 @@ fun CutterScreen(
                 }
             }
             Spacer(Modifier.height(24.dp))
+        }
+    }
+
+        if (wide) {
+            Row(Modifier.fillMaxSize()) {
+                Column(Modifier.weight(1f)) { head() }
+                Column(Modifier.weight(1f)) { body(Modifier.fillMaxHeight()) }
+            }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                head()
+                body(Modifier.weight(1f))
+            }
         }
     }
 }

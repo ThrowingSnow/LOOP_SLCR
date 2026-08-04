@@ -52,6 +52,18 @@ import kotlin.math.pow
  * horizontal sliders make that a scroll and a memory test. The faders are
  * vertical for the same reason every mixer's are — the eye compares heights.
  *
+ * # Why there is a rows view as well
+ *
+ * A desk needs width, and a phone held upright has little of it — three strips
+ * on a narrow screen are three narrow strips. Rows give each channel the whole
+ * width and the file name room to be read, at the cost of the comparison the
+ * desk is for. Which of those matters is not something this file can know, so
+ * it is a setting rather than a guess: SETTINGS → DISPLAY.
+ *
+ * The two views share every number. Same meter scale, same fader travel, same
+ * detent at unity — only the direction changes, because a control that behaves
+ * differently depending on how it is drawn is two controls wearing one name.
+ *
  * # Why the channel meters ignore the master
  *
  * They are post-*their* fader and pre-master, which is the console arrangement:
@@ -83,6 +95,7 @@ fun MixerScreen(
     playing: Boolean,
     onGains: (Float, Float) -> Unit,
     onMasterGain: (Float) -> Unit,
+    view: MixerView = MixerView.Desk,
 ) {
     // Polled like the play head, and for the same reason: the audio thread
     // publishes to an atomic and must not be made to notify anyone.
@@ -127,44 +140,63 @@ fun MixerScreen(
             return@Column
         }
 
-        Panel {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Strip(
-                    tag = "1",
-                    name = first.name,
-                    gain = gains.first,
-                    level = one,
-                    master = false,
-                    onGain = { onGains(it, gains.second) },
-                    modifier = Modifier.weight(1f),
-                )
-                Strip(
-                    tag = "2",
-                    name = second?.name ?: "no second loop",
-                    gain = gains.second,
-                    level = two,
-                    master = false,
-                    // A strip with nothing under it is shown dead rather than
-                    // hidden, so the desk keeps its shape while you load one.
-                    enabled = second != null,
-                    onGain = { onGains(gains.first, it) },
-                    modifier = Modifier.weight(1f),
-                )
-                Strip(
-                    tag = "MST",
-                    name = "what leaves",
-                    gain = masterGain,
-                    level = out,
-                    master = true,
-                    onGain = onMasterGain,
-                    modifier = Modifier.weight(1f),
-                )
+        val channelOne = @Composable { desk: Boolean ->
+            Strip(
+                tag = "1",
+                name = first.name,
+                gain = gains.first,
+                level = one,
+                master = false,
+                desk = desk,
+                onGain = { onGains(it, gains.second) },
+                modifier = if (desk) Modifier.weight(1f) else Modifier.fillMaxWidth(),
+            )
+        }
+        val channelTwo = @Composable { desk: Boolean ->
+            Strip(
+                tag = "2",
+                name = second?.name ?: "no second loop",
+                gain = gains.second,
+                level = two,
+                master = false,
+                desk = desk,
+                // A strip with nothing under it is shown dead rather than
+                // hidden, so the desk keeps its shape while you load one.
+                enabled = second != null,
+                onGain = { onGains(gains.first, it) },
+                modifier = if (desk) Modifier.weight(1f) else Modifier.fillMaxWidth(),
+            )
+        }
+        val master = @Composable { desk: Boolean ->
+            Strip(
+                tag = "MST",
+                name = "what leaves",
+                gain = masterGain,
+                level = out,
+                master = true,
+                desk = desk,
+                onGain = onMasterGain,
+                modifier = if (desk) Modifier.weight(1f) else Modifier.fillMaxWidth(),
+            )
+        }
+
+        if (view == MixerView.Desk) {
+            Panel {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    channelOne(true)
+                    channelTwo(true)
+                    master(true)
+                }
             }
+        } else {
+            Panel { Box(Modifier.padding(12.dp)) { channelOne(false) } }
+            Panel { Box(Modifier.padding(12.dp)) { channelTwo(false) } }
+            Panel { Box(Modifier.padding(12.dp)) { master(false) } }
         }
 
         if (!playing) {
@@ -195,7 +227,7 @@ fun MixerScreen(
     }
 }
 
-/** One channel of the desk: a name, a meter, a fader and its number. */
+/** One channel: a name, a meter, a fader and its number, either way up. */
 @Composable
 private fun Strip(
     tag: String,
@@ -203,10 +235,57 @@ private fun Strip(
     gain: Float,
     level: Float,
     master: Boolean,
+    desk: Boolean,
     onGain: (Float) -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
+    if (!desk) {
+        Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.width(96.dp)) {
+                Text(
+                    tag,
+                    color = if (master) Palette.wave else Palette.text,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Text(
+                    name,
+                    color = Palette.dim,
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Meter(
+                    level,
+                    vertical = false,
+                    modifier = Modifier.fillMaxWidth().height(8.dp).testTag("meter$tag"),
+                )
+                // The same travel as the desk's fader, lying down: the value a
+                // finger lands on must not depend on which view is showing.
+                ThinSlider(
+                    value = travel(gain),
+                    onValueChange = { if (enabled) onGain(fromTravel(it)) },
+                    valueRange = 0f..1f,
+                    modifier = Modifier.fillMaxWidth().testTag("fader$tag"),
+                )
+            }
+            Text(
+                if (enabled) decibels(gain) else "—",
+                color = if (enabled) Palette.text else Palette.dim,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.width(64.dp),
+                textAlign = TextAlign.End,
+            )
+        }
+        return
+    }
+
     Column(
         modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -234,7 +313,11 @@ private fun Strip(
             Modifier.height(190.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Meter(level, Modifier.width(10.dp).fillMaxHeight().testTag("meter$tag"))
+            Meter(
+                level,
+                vertical = true,
+                modifier = Modifier.width(10.dp).fillMaxHeight().testTag("meter$tag"),
+            )
             Fader(
                 gain = gain,
                 enabled = enabled,
@@ -253,27 +336,34 @@ private fun Strip(
 }
 
 /**
- * A vertical peak bar, on a decibel scale.
+ * A peak bar, on a decibel scale.
  *
- * Linear, everything quiet enough to be worth adjusting would sit in the bottom
+ * Linear, everything quiet enough to be worth adjusting would sit in the first
  * tenth and the meter would be decoration.
  */
 @Composable
-private fun Meter(level: Float, modifier: Modifier = Modifier) {
+private fun Meter(level: Float, vertical: Boolean, modifier: Modifier = Modifier) {
     Canvas(modifier.fillMaxSize()) {
         drawRect(Palette.trackIdle, size = size)
-        val filled = meterScale(level) * size.height
+        val colour = if (level >= 1f) Palette.bad else Palette.wave
+        val filled = meterScale(level)
         if (filled > 0f) {
-            drawRect(
-                color = if (level >= 1f) Palette.bad else Palette.wave,
-                topLeft = Offset(0f, size.height - filled),
-                size = Size(size.width, filled),
-            )
+            if (vertical) {
+                val high = filled * size.height
+                drawRect(colour, Offset(0f, size.height - high), Size(size.width, high))
+            } else {
+                drawRect(colour, Offset(0f, 0f), Size(filled * size.width, size.height))
+            }
         }
-        // Where clipping starts, so a bar near the top can be read as near it
-        // rather than merely tall.
-        val unity = size.height - meterScale(1f) * size.height
-        drawRect(Palette.dim, topLeft = Offset(0f, unity), size = Size(size.width, 1f))
+        // Where clipping starts, so a bar near the end can be read as near it
+        // rather than merely long.
+        val unity = meterScale(1f)
+        if (vertical) {
+            val y = size.height - unity * size.height
+            drawRect(Palette.dim, Offset(0f, y), Size(size.width, 1f))
+        } else {
+            drawRect(Palette.dim, Offset(unity * size.width - 1f, 0f), Size(1f, size.height))
+        }
     }
 }
 

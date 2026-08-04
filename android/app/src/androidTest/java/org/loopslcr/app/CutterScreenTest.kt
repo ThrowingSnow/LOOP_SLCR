@@ -2,6 +2,10 @@ package org.loopslcr.app
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.Modifier
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -13,6 +17,8 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -334,6 +340,132 @@ class CutterScreenTest {
             "target BPM starts at ${target.left}, semitones ends at ${semitones.right}",
             (target.left - semitones.right).value > 40f,
         )
+    }
+
+    @Test
+    fun the_mixer_can_be_rows_instead_and_the_numbers_do_not_change() {
+        // A desk needs width and a phone held upright has little of it. Which
+        // matters more is not something the code can know, so it is a setting —
+        // but both views have to be the same instrument underneath.
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+        val file = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks)
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                MixerScreen(
+                    first = file,
+                    second = file,
+                    gains = 1f to 1f,
+                    masterGain = 1f,
+                    levels = { Triple(0f, 0f, 0f) },
+                    playing = false,
+                    onGains = { _, _ -> },
+                    onMasterGain = {},
+                    view = MixerView.Rows,
+                )
+            }
+        }
+
+        val one = compose.onNodeWithTag("fader1").getBoundsInRoot()
+        val two = compose.onNodeWithTag("fader2").getBoundsInRoot()
+        val mst = compose.onNodeWithTag("faderMST").getBoundsInRoot()
+        assertTrue(
+            "rows at ${one.top}, ${two.top}, ${mst.top}",
+            one.top < two.top && two.top < mst.top,
+        )
+        assertTrue("a row is wider than it is tall", one.right - one.left > one.bottom - one.top)
+        // All three still say 0.0 dB, from the same arithmetic as the desk.
+        compose.onAllNodesWithText("+0.0 dB").assertCountEquals(3)
+
+        save(compose.onRoot().captureToImage().asAndroidBitmap(), "mixer-rows.png")
+    }
+
+    @Test
+    fun the_display_choices_are_remembered_and_reported() {
+        // A setting that forgot itself on every launch would be worse than no
+        // setting: you would make the choice again every time, which is the
+        // opposite of what a preference is for.
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val preferences = Preferences(context)
+        val before = preferences.load()
+        try {
+            preferences.save(Display(MixerView.Rows, Screen.Landscape))
+            assertEquals(Display(MixerView.Rows, Screen.Landscape), Preferences(context).load())
+            preferences.save(Display())
+            assertEquals(Display(MixerView.Desk, Screen.Auto), Preferences(context).load())
+        } finally {
+            preferences.save(before)
+        }
+
+        var chosen: Display? = null
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                SettingsScreen(
+                    engineVersion = "test",
+                    build = "test",
+                    display = Display(),
+                    onDisplay = { chosen = it },
+                )
+            }
+        }
+        compose.onNodeWithTag("mixerRows").performScrollTo().performClick()
+        assertEquals(MixerView.Rows, chosen?.mixer)
+        compose.onNodeWithTag("screenLandscape").performScrollTo().performClick()
+        assertEquals(Screen.Landscape, chosen?.screen)
+    }
+
+    @Test
+    fun sideways_the_panels_stand_beside_the_waveform_rather_than_under_it() {
+        // The same split turned ninety degrees. Measured off the layout's own
+        // constraints rather than asked of the device, because a tablet held
+        // upright with room to spare wants the wide arrangement too.
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+        val file = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks)
+        var size by mutableStateOf(400.dp to 800.dp)
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                Box(Modifier.size(size.first, size.second)) {
+                    CutterScreen(
+                        loaded = file,
+                        settings = Settings(),
+                        plan = null,
+                        busy = Busy.Idle,
+                        problem = null,
+                        onOpen = {},
+                        onExport = {},
+                        onChange = {},
+                        onDismissProblem = {},
+                    )
+                }
+            }
+        }
+
+        val tallWave = compose.onNodeWithTag("wave").getBoundsInRoot()
+        val tallPanels = compose.onNodeWithTag("panels").getBoundsInRoot()
+        assertTrue(
+            "upright, the panels are at ${tallPanels.top} and the wave ends at ${tallWave.bottom}",
+            tallPanels.top >= tallWave.bottom,
+        )
+
+        compose.runOnIdle { size = 800.dp to 400.dp }
+
+        val wideWave = compose.onNodeWithTag("wave").getBoundsInRoot()
+        val widePanels = compose.onNodeWithTag("panels").getBoundsInRoot()
+        assertTrue(
+            "sideways, the panels start at ${widePanels.left} and the wave ends at ${wideWave.right}",
+            widePanels.left >= wideWave.right,
+        )
+        assertTrue(
+            "sideways, the picture no longer reaches the panels' row",
+            widePanels.top < wideWave.bottom,
+        )
+
+        save(compose.onRoot().captureToImage().asAndroidBitmap(), "cutter-wide.png")
     }
 
     @Test
