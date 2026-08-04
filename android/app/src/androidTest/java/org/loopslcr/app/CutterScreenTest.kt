@@ -22,6 +22,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import java.io.File
+import kotlin.math.absoluteValue
 
 /**
  * The screen with a file in it.
@@ -269,6 +270,62 @@ class CutterScreenTest {
 
         compose.onNodeWithText("90").assertExists()
         compose.onNodeWithText("150").assertDoesNotExist()
+    }
+
+    @Test
+    fun the_typed_tempo_rides_the_row_of_the_speed_it_sets() {
+        // It was a full-width Material field under the slider: a floating label,
+        // a 56 dp minimum and most of a thumb's height of air around four
+        // characters — on the one screen whose entire layout exists so that the
+        // waveform never has to move. The number you type and the number it
+        // produces are one fact, so they share a line.
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+        val plan = Engine.plan(org.loopslcr.Native.direct(raw), "200 loop.wav", Settings())
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                CutterScreen(
+                    loaded = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks),
+                    settings = Settings(speedMode = SpeedMode.TargetBpm, targetBpm = 150.0),
+                    plan = plan,
+                    busy = Busy.Idle,
+                    problem = null,
+                    onOpen = {},
+                    onExport = {},
+                    onChange = {},
+                    onDismissProblem = {},
+                )
+            }
+        }
+
+        val field = compose.onNodeWithTag("tempoField").getBoundsInRoot()
+        val speed = compose.onNodeWithText("speed").getBoundsInRoot()
+
+        // Same line: the two boxes overlap vertically. Nothing that sits under
+        // the slider can satisfy this.
+        assertTrue(
+            "field ${field.top}..${field.bottom}, speed ${speed.top}..${speed.bottom}",
+            field.top < speed.bottom && speed.top < field.bottom,
+        )
+
+        // A quarter of the strip it sits in — measured against the strip, not
+        // against what the readout left over. A field sized by the leftovers
+        // changes width as the readout does, which is every drag of the slider.
+        val strip = compose.onNodeWithTag("varispeed").getBoundsInRoot()
+        val width = field.right - field.left
+        val quarter = (strip.right - strip.left) / 4
+        assertTrue(
+            "field is $width, a quarter of the strip is $quarter",
+            (width - quarter).value.absoluteValue < 2f,
+        )
+
+        // And it is at the right-hand end of that strip, not floating mid-row.
+        assertTrue(
+            "field ends at ${field.right}, the strip at ${strip.right}",
+            (strip.right - field.right).value.absoluteValue < 2f,
+        )
     }
 
     @Test

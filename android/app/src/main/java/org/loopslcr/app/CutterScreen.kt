@@ -2,9 +2,13 @@ package org.loopslcr.app
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -38,8 +42,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
@@ -78,8 +87,8 @@ fun CutterScreen(
             .background(Palette.background),
     ) {
         Column(
-            Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Header(loaded, busy, playing, onOpen, onPlay)
 
@@ -133,8 +142,10 @@ fun CutterScreen(
             Modifier
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            // Tighter than the pinned half above it: these are lids in a list,
+            // and air between lids only costs the list its last row.
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             // The file's own figures live behind the name in [Header]; what is
             // here is what a *decision* is made from.
@@ -329,14 +340,16 @@ private fun Section(
         shape = RoundedCornerShape(8.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 2.dp)) {
             Row(
                 Modifier
                     .fillMaxWidth()
                     .clickable { open = !open }
                     // A bigger target as well as a bigger mark: the whole row is
-                    // tappable, and it is now tall enough to hit without aiming.
-                    .padding(vertical = 10.dp),
+                    // tappable, and it stays tall enough to hit without aiming.
+                    // 6 dp of padding around a 17 sp caret is still a ~40 dp row,
+                    // which is the floor — below that this stops being a button.
+                    .padding(vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -358,8 +371,8 @@ private fun Section(
 
             if (open) {
                 Column(
-                    Modifier.padding(bottom = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    Modifier.padding(bottom = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     content()
                 }
@@ -772,30 +785,72 @@ private fun PitchStrip(
     // disappearance this app keeps having to be talked out of.
     val source = plan?.tempo ?: analysis.tempo
 
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text("speed", color = Palette.dim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-        // In semitone mode this is the *setting*, not the plan. Same lesson the
-        // markers taught: a live control has to follow the finger, and reading
-        // it back from the pipeline puts a debounce between a drag and its own
-        // readout. In target-BPM mode there is no setting to show — the
-        // semitones are derived — so the plan is the only source.
-        val shown = when (s.speedMode) {
-            SpeedMode.Semitones -> s.semitones
-            SpeedMode.TargetBpm -> plan?.semitones
-        }
-        Text(
-            shown?.let { "  %+.2f st".format(it) } ?: "  —",
-            color = if (shown == null || shown == 0.0) Palette.dim else Palette.text,
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
-        )
-        if (plan != null && plan.ratio != 1.0) {
+    // Typed as well as swept: a slider cannot land on exactly 90, and exactly 90
+    // is usually the point. Hoisted out of the `when` below so it can ride the
+    // readout row — see [TempoField].
+    var typed by remember { mutableStateOf(s.targetBpm?.let(::trim) ?: "") }
+    // Adopt a value that arrived from somewhere else — the slider, or the
+    // calculator's "send to cutter". Keyed on the *value*, not on the mode:
+    // keying on the mode meant a tempo sent from the calculator while this mode
+    // was already selected left the old number sitting in the field, which is
+    // how it looked like nothing had happened.
+    LaunchedEffect(s.targetBpm) {
+        val mine = typed.toDoubleOrNull()
+        if (s.targetBpm != null && s.targetBpm != mine) typed = trim(s.targetBpm)
+    }
+
+    // A quarter of the strip, measured against the strip rather than against
+    // whatever the readout left over — a field whose width depends on the length
+    // of the sentence beside it changes size as you drag the slider.
+    BoxWithConstraints(Modifier.fillMaxWidth().testTag("varispeed")) {
+        val quarter = maxWidth / 4
+
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("speed", color = Palette.dim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+            // In semitone mode this is the *setting*, not the plan. Same lesson the
+            // markers taught: a live control has to follow the finger, and reading
+            // it back from the pipeline puts a debounce between a drag and its own
+            // readout. In target-BPM mode there is no setting to show — the
+            // semitones are derived — so the plan is the only source.
+            val shown = when (s.speedMode) {
+                SpeedMode.Semitones -> s.semitones
+                SpeedMode.TargetBpm -> plan?.semitones
+            }
             Text(
-                "   ${trim(plan.tempo)} → ${trim(plan.resultingTempo)} BPM",
-                color = if (plan.ratioExact) Palette.dim else Palette.warn,
-                fontSize = 11.sp,
+                shown?.let { "  %+.2f st".format(it) } ?: "  —",
+                color = if (shown == null || shown == 0.0) Palette.dim else Palette.text,
+                fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
             )
+            if (plan != null && plan.ratio != 1.0) {
+                Text(
+                    "   ${trim(plan.tempo)} → ${trim(plan.resultingTempo)} BPM",
+                    color = if (plan.ratioExact) Palette.dim else Palette.warn,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+            }
+
+            Spacer(Modifier.weight(1f))
+
+            // The number you type sits on the same line as the number it produces.
+            // As a full-width Material field it was three rows tall for four
+            // characters, and the two halves of one fact were a slider apart.
+            if (s.speedMode == SpeedMode.TargetBpm) {
+                TempoField(
+                    value = typed,
+                    placeholder = source?.let(::trim) ?: "—",
+                    onValueChange = { entered ->
+                        typed = entered
+                        val value = entered.toDoubleOrNull()
+                        onChange { it.copy(targetBpm = if (value != null && value > 0) value else null) }
+                    },
+                    modifier = Modifier.width(quarter).testTag("tempoField"),
+                )
+            }
         }
     }
 
@@ -848,31 +903,75 @@ private fun PitchStrip(
                 )
             }
 
-            // Typed as well as swept: a slider cannot land on exactly 90, and
-            // exactly 90 is usually the point.
-            var text by remember { mutableStateOf(s.targetBpm?.let(::trim) ?: "") }
-            // Adopt a value that arrived from somewhere else — the slider, or
-            // the calculator's "send to cutter". Keyed on the *value*, not on
-            // the mode: keying on the mode meant a tempo sent from the
-            // calculator while this mode was already selected left the old
-            // number sitting in the field, which is how it looked like nothing
-            // had happened.
-            LaunchedEffect(s.targetBpm) {
-                val mine = text.toDoubleOrNull()
-                if (s.targetBpm != null && s.targetBpm != mine) text = trim(s.targetBpm)
-            }
-            OutlinedTextField(
-                value = text,
-                onValueChange = { entered ->
-                    text = entered
-                    val value = entered.toDoubleOrNull()
-                    onChange { it.copy(targetBpm = if (value != null && value > 0) value else null) }
-                },
-                label = { Text("target BPM") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
         }
+    }
+}
+
+/**
+ * The typed tempo: one row, a quarter wide, beside the speed it sets.
+ *
+ * Hand-rolled rather than [OutlinedTextField], which has a fixed 56 dp minimum
+ * and a floating label above that — most of a thumb's height of air around four
+ * characters, on the one screen whose entire layout exists so the waveform never
+ * has to move.
+ *
+ * The box is its own [Box] rather than the field's `modifier`, which
+ * [BasicTextField] hands to the editor *inside* the decoration — so anything
+ * measuring what the caller sized would be measuring the text, minus the
+ * padding, and not the cell at all.
+ */
+@Composable
+private fun TempoField(
+    value: String,
+    placeholder: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier
+            .border(1.dp, Palette.outline, RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            textStyle = TextStyle(
+                color = Palette.text,
+                fontSize = 13.sp,
+                fontFamily = FontFamily.Monospace,
+                textAlign = TextAlign.End,
+            ),
+            cursorBrush = SolidColor(Palette.wave),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth(),
+            decorationBox = { inner ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // The unit inside the box rather than a label above it. The chip
+                    // overhead already says target BPM; this only has to stop the
+                    // number being a bare figure with no dimension.
+                    Text(
+                        "BPM",
+                        color = Palette.dim,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                        // The source tempo greyed out when nothing is typed, so an
+                        // empty box still says what leaving it empty means.
+                        if (value.isEmpty()) {
+                            Text(
+                                placeholder,
+                                color = Palette.dim,
+                                fontSize = 13.sp,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                        }
+                        inner()
+                    }
+                }
+            },
+        )
     }
 }
 
