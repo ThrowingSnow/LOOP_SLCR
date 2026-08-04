@@ -1,6 +1,7 @@
 package org.loopslcr.app
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -430,6 +431,74 @@ class CutterScreenTest {
         // 200 BPM from the name, so the span is 100..400 and the slider stands.
         compose.onNodeWithTag("bpmSlider").assertExists()
         compose.onNodeWithText("no source tempo yet", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun the_master_switch_stands_beside_the_slider_and_only_when_there_are_two_loops() {
+        // It was two chips naming both loops, on a row of their own. With one
+        // loop there is nothing to be master *of*, so the switch is absent
+        // rather than dead — and where it belongs is against the control it
+        // governs, not on a line spent saying so.
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+        var master by mutableStateOf<Boolean?>(null)
+        var asked: Boolean? = null
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                CutterScreen(
+                    loaded = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks),
+                    settings = Settings(),
+                    plan = null,
+                    busy = Busy.Idle,
+                    problem = null,
+                    master = master,
+                    onMaster = { on -> asked = on },
+                    onOpen = {},
+                    onExport = {},
+                    onChange = {},
+                    onDismissProblem = {},
+                )
+            }
+        }
+
+        // No second loop: not there at all.
+        compose.onNodeWithTag("master").assertDoesNotExist()
+
+        compose.runOnIdle { master = false }
+
+        val switch = compose.onNodeWithTag("master").getBoundsInRoot()
+        val slider = compose.onNodeWithTag("semitoneSlider").getBoundsInRoot()
+        // Beside, not above: the same row, and the slider to its right.
+        assertTrue(
+            "MSTR at ${switch.top}..${switch.bottom}, slider at ${slider.top}..${slider.bottom}",
+            switch.top < slider.bottom && slider.top < switch.bottom,
+        )
+        // Left of it, and the slider takes the rest of the row. Compared on the
+        // left edges: a slider's node reaches a couple of dp back for its thumb,
+        // so the two touch targets legitimately overlap at the seam.
+        assertTrue(
+            "MSTR from ${switch.left}, slider from ${slider.left} to ${slider.right}",
+            switch.left < slider.left && slider.right > switch.right,
+        )
+
+        compose.onNodeWithTag("master").performClick()
+        assertEquals("off asks to be turned on", true, asked)
+    }
+
+    @Test
+    fun the_master_holds_a_tempo_and_lets_go_of_one_moved_by_hand() {
+        // The rule the switch is made of. On, the pair runs at that loop's
+        // tempo and follows it when it changes; the moment the speed is moved
+        // by hand it is no longer that loop's tempo, and the switch has to
+        // notice rather than put the number back.
+        val at = Settings(speedMode = SpeedMode.TargetBpm, targetBpm = 93.0)
+        assertTrue(holdsTempo(at, 93.0))
+        assertTrue("a rounding step is not a hand", holdsTempo(at.copy(targetBpm = 93.0005), 93.0))
+        assertTrue("a drag is", !holdsTempo(at.copy(targetBpm = 94.0), 93.0))
+        assertTrue("so is switching units", !holdsTempo(at.copy(speedMode = SpeedMode.Semitones), 93.0))
+        assertTrue("a loop with no tempo cannot be the reference", !holdsTempo(at, null))
     }
 
     @Test

@@ -176,6 +176,7 @@ class MainActivity : ComponentActivity() {
                 val secondPlan by model.secondPlan.collectAsState()
                 val secondProblem by model.secondProblem.collectAsState()
                 val gains by model.gains.collectAsState()
+                val masterDeck by model.master.collectAsState()
                 val calculator by model.calculator.collectAsState()
                 val sums by model.sums.collectAsState()
                 val calculatorProblem by model.calculatorProblem.collectAsState()
@@ -232,8 +233,8 @@ class MainActivity : ComponentActivity() {
                             pair = pair,
                             hasSecond = second != null,
                             onPair = { change -> model.setPair(change) },
-                            partnerTempo = secondPlan?.tempo,
-                            onMaster = { fromSecond -> model.masterFrom(fromSecond) },
+                            master = if (second == null) null else masterDeck == 1,
+                            onMaster = { on -> model.setMaster(1, on) },
                             onPlay = { model.togglePlay() },
                             onDragMarker = { marker, at -> model.dragMarker(marker, at) },
                             onOpen = {
@@ -265,7 +266,8 @@ class MainActivity : ComponentActivity() {
                             onChange = { change -> model.updateSecond(change) },
                             master = settings,
                             onMaster = { change -> model.update(change) },
-                            onMasterFrom = { fromSecond -> model.masterFrom(fromSecond) },
+                            isMaster = masterDeck == 2,
+                            onIsMaster = { on -> model.setMaster(2, on) },
                         )
 
                         2 -> MixerScreen(

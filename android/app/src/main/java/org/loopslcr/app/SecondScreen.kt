@@ -59,7 +59,9 @@ fun SecondScreen(
     /** The master speed — the pair's, not this loop's. See below. */
     master: Settings = Settings(),
     onMaster: ((Settings) -> Settings) -> Unit = {},
-    onMasterFrom: ((Boolean) -> Unit)? = null,
+    /** Whether *this* loop is the pair's speed reference. */
+    isMaster: Boolean = false,
+    onIsMaster: (Boolean) -> Unit = {},
 ) {
     Column(
         Modifier
@@ -138,8 +140,9 @@ fun SecondScreen(
         // It is the *pair's* speed, not this loop's — there is one play head, so
         // there is one speed — but this is where you are standing when you want
         // to hear how the second loop sits, and sending someone to another tab
-        // to turn it is how a control stops being used. The MSTR chips choose
-        // which of the two loops it is measured against.
+        // to turn it is how a control stops being used. MSTR, beside the
+        // slider, says which of the two loops the speed is measured against —
+        // on here, the pair runs at *this* loop's tempo.
         Text(
             "MASTER SPEED",
             color = Palette.dim,
@@ -151,8 +154,8 @@ fun SecondScreen(
             firstPlan,
             first.analysis,
             onMaster,
-            partnerTempo = plan?.tempo,
-            onMaster = onMasterFrom,
+            master = isMaster,
+            onMaster = onIsMaster,
         )
 
         // The fit, in numbers. This is the one thing worth saying loudest: it is

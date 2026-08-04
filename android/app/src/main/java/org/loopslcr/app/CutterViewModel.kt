@@ -15,6 +15,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
 import java.nio.ByteBuffer
+import kotlin.math.abs
 
 
 /** How many waveform buckets to ask for. Redrawn on resize, not re-measured. */
@@ -286,6 +287,8 @@ class CutterViewModel : ViewModel() {
         _secondPlan.value = null
         _secondProblem.value = null
         _pair.update { it.copy(on = false) }
+        // Nothing left to be master of, and nothing left for loop 2 to be.
+        _master.value = null
         player.clearPartner()
         pushPair()
     }
@@ -336,6 +339,7 @@ class CutterViewModel : ViewModel() {
                 _secondPlan.value = withContext(Dispatchers.Default) {
                     Engine.plan(file.bytes, file.name, wanted)
                 }
+                applyMaster()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -358,22 +362,62 @@ class CutterViewModel : ViewModel() {
     /** The loudest sample each loop contributed to the last block, after gain. */
     fun levels(): Pair<Float, Float> = player.peaks()
 
+    // --- which loop the pair's speed is measured against ------------------
+
+    /** 1 or 2 while a loop is the reference, null while the speed is free. */
+    private val _master = MutableStateFlow<Int?>(null)
+    val master: StateFlow<Int?> = _master.asStateFlow()
+
     /**
-     * Pulls the pair to one loop's tempo.
+     * Makes one loop the pair's speed reference — or lets it go.
      *
-     * An action, not a mode, and the difference matters. As a mode it would have
-     * to re-apply itself whenever the referenced loop changed, which means
-     * fighting the next drag of the tempo slider. Pressed, it sets the target;
-     * the chip lights while the target still matches, and a drag simply moves
-     * away from it without anything having to be un-chosen.
+     * There is one speed, because there is one play head. MSTR does not give a
+     * loop a speed of its own; it says which loop's tempo the pair runs at, and
+     * so which one is pulled to the other. **At most one deck can hold it**:
+     * turning it on here turns it off there, because two references is not a
+     * state that means anything.
      *
-     * There is only one speed in the pair, because there is only one play head.
-     * What this chooses is which loop it is measured against.
+     * Held rather than pressed once, so that a tempo that changes later — a bar
+     * count edited, a source tempo typed in — carries the pair with it. What
+     * keeps that from fighting the finger is [releaseMaster]: any hand-moved
+     * speed drops the reference rather than being overwritten by it.
      */
-    fun masterFrom(second: Boolean) {
-        val tempo = if (second) _secondPlan.value?.tempo else _plan.value?.tempo
-        tempo ?: return
+    fun setMaster(deck: Int, on: Boolean) {
+        if (!on) {
+            if (_master.value == deck) _master.value = null
+            return
+        }
+        if (masterTempo(deck) == null) {
+            _problem.value = "loop $deck has no tempo yet — set one under SOURCE"
+            return
+        }
+        _master.value = deck
+        applyMaster()
+    }
+
+    private fun masterTempo(deck: Int? = _master.value): Double? = when (deck) {
+        1 -> _plan.value?.tempo
+        2 -> _secondPlan.value?.tempo
+        else -> null
+    }
+
+    /**
+     * Pulls the pair to the reference loop's tempo.
+     *
+     * Silent when it already is there — not an optimisation but a stop: this
+     * runs when a plan lands, and a plan lands because of an update, so putting
+     * an update at the end of it unconditionally is a loop that never settles.
+     */
+    private fun applyMaster() {
+        val tempo = masterTempo() ?: return
+        if (holdsTempo(_settings.value, tempo)) return
         update { it.copy(speedMode = SpeedMode.TargetBpm, targetBpm = tempo) }
+    }
+
+    /** Drops the reference as soon as the speed stops being that loop's tempo. */
+    private fun releaseMaster() {
+        val tempo = masterTempo() ?: return
+        if (!holdsTempo(_settings.value, tempo)) _master.value = null
     }
 
     private val _motion = MutableStateFlow(MotionSettings())
@@ -557,6 +601,9 @@ class CutterViewModel : ViewModel() {
             Speed.ratio(after, sourceTempo())?.let { player.setRatio(it) }
         }
 
+        // A hand on the speed outranks the MSTR switch — see [setMaster].
+        releaseMaster()
+
         schedulePlan(immediately = false)
     }
 
@@ -584,6 +631,8 @@ class CutterViewModel : ViewModel() {
                 }
                 _plan.value = plan
                 _problem.value = null
+                // The reference loop's tempo may have just moved under it.
+                applyMaster()
                 followPreview(plan)
             } catch (e: CancellationException) {
                 // A newer change cancelled this one. That is the debounce
@@ -638,3 +687,15 @@ class CutterViewModel : ViewModel() {
 /** `100.0` reads as `100`; `103.5` has to keep its half. */
 fun trim(value: Double): String =
     if (value == value.toLong().toDouble()) value.toLong().toString() else "%.3f".format(value).trimEnd('0').trimEnd('.')
+
+/**
+ * Whether a speed setting still *is* that tempo.
+ *
+ * The single question both halves of MSTR ask: applying asks it to avoid
+ * re-applying what is already there, releasing asks it to notice a hand on the
+ * slider. Milli-BPM, because that is the resolution the tempo slider snaps to —
+ * a tighter comparison would drop the reference on a rounding step nobody made.
+ */
+internal fun holdsTempo(s: Settings, tempo: Double?): Boolean =
+    tempo != null && s.speedMode == SpeedMode.TargetBpm &&
+        s.targetBpm?.let { abs(it - tempo) < 0.001 } == true

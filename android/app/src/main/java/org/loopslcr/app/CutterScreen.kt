@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -77,8 +78,9 @@ fun CutterScreen(
     pair: PairSettings = PairSettings(),
     hasSecond: Boolean = false,
     onPair: ((PairSettings) -> PairSettings) -> Unit = {},
-    partnerTempo: Double? = null,
-    onMaster: ((Boolean) -> Unit)? = null,
+    /** Whether this loop is the pair's speed reference; null with no partner. */
+    master: Boolean? = null,
+    onMaster: (Boolean) -> Unit = {},
 ) {
     // One lane or two, and it is a *view*, not a setting: nothing about the file
     // or the cut changes. Folded, the picture is half as tall, and on a phone
@@ -148,7 +150,7 @@ fun CutterScreen(
                     plan,
                     loaded.analysis,
                     onChange,
-                    partnerTempo = partnerTempo,
+                    master = master,
                     onMaster = onMaster,
                 )
             }
@@ -833,9 +835,12 @@ internal fun PitchStrip(
     plan: Plan?,
     analysis: Analysis,
     onChange: ((Settings) -> Settings) -> Unit,
-    /** The other loop's tempo, when there is one, for the MSTR chips. */
-    partnerTempo: Double? = null,
-    onMaster: ((Boolean) -> Unit)? = null,
+    /**
+     * Whether *this* loop is the one the pair's speed is measured against —
+     * or null when there is no second loop and the question does not arise.
+     */
+    master: Boolean? = null,
+    onMaster: (Boolean) -> Unit = {},
 ) {
     // The source tempo, which is what a target tempo is a ratio *of*. Without
     // it there is no honest slider range, only an invented one.
@@ -929,39 +934,6 @@ internal fun PitchStrip(
         }
     }
 
-    // Which loop the pair is running at. There is only one speed, because there
-    // is only one play head; what this chooses is which loop it is measured
-    // against — press it and the pair is pulled to that loop's own tempo.
-    //
-    // An action rather than a mode. As a mode it would have to re-apply itself
-    // whenever the referenced loop changed, and would then be fighting the next
-    // drag of the tempo slider. Pressed, it sets the target; the chip lights
-    // while the target still matches, and a drag simply moves away from it.
-    if (onMaster != null && partnerTempo != null) {
-        val here = plan?.tempo
-        val matches = { tempo: Double? ->
-            tempo != null && s.speedMode == SpeedMode.TargetBpm &&
-                s.targetBpm?.let { abs(it - tempo) < 0.001 } == true
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "MSTR",
-                color = Palette.dim,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-            )
-            Spacer(Modifier.width(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Chip("loop 1${here?.let { "  ${trim(it)}" } ?: ""}", matches(here)) {
-                    onMaster(false)
-                }
-                Chip("loop 2  ${trim(partnerTempo)}", matches(partnerTempo)) {
-                    onMaster(true)
-                }
-            }
-        }
-    }
-
     if (plan != null && plan.ratio != 1.0 && !plan.ratioExact) {
         // Only when it is *not* exact. The resulting tempo is on the row above;
         // what that row cannot say is that the ratio did not come out clean, and
@@ -975,19 +947,21 @@ internal fun PitchStrip(
     }
 
     when (s.speedMode) {
-        SpeedMode.Semitones -> ThinSlider(
-            value = s.semitones.toFloat().coerceIn(-12f, 12f),
-            onValueChange = { raw ->
-                // A detent at unity, because "no change" has to be reachable
-                // with a finger. Without it every drag leaves a ratio of 1.003
-                // that costs a resample and buys nothing.
-                val v = raw.toDouble()
-                val snapped = if (abs(v) < DETENT_SEMITONES) 0.0 else (v * 100).roundToInt() / 100.0
-                onChange { it.copy(semitones = snapped) }
-            },
-            valueRange = -12f..12f,
-            modifier = Modifier.fillMaxWidth().testTag("semitoneSlider"),
-        )
+        SpeedMode.Semitones -> SpeedRow(master, onMaster) {
+            ThinSlider(
+                value = s.semitones.toFloat().coerceIn(-12f, 12f),
+                onValueChange = { raw ->
+                    // A detent at unity, because "no change" has to be reachable
+                    // with a finger. Without it every drag leaves a ratio of 1.003
+                    // that costs a resample and buys nothing.
+                    val v = raw.toDouble()
+                    val snapped = if (abs(v) < DETENT_SEMITONES) 0.0 else (v * 100).roundToInt() / 100.0
+                    onChange { it.copy(semitones = snapped) }
+                },
+                valueRange = -12f..12f,
+                modifier = Modifier.weight(1f).testTag("semitoneSlider"),
+            )
+        }
 
         SpeedMode.TargetBpm -> {
             // The same musical span as the semitone slider: an octave either
@@ -997,18 +971,20 @@ internal fun PitchStrip(
             if (source != null && source > 0.0) {
                 val low = (source / 2.0).toFloat()
                 val high = (source * 2.0).toFloat()
-                ThinSlider(
-                    value = (s.targetBpm ?: source).toFloat().coerceIn(low, high),
-                    onValueChange = { raw ->
-                        val snapped = (raw * 1000).roundToInt() / 1000.0
-                        // A detent at the source tempo, for the same reason the
-                        // semitone slider has one at zero.
-                        val v = if (abs(snapped - source) < source * 0.002) source else snapped
-                        onChange { it.copy(targetBpm = v) }
-                    },
-                    valueRange = low..high,
-                    modifier = Modifier.fillMaxWidth().testTag("bpmSlider"),
-                )
+                SpeedRow(master, onMaster) {
+                    ThinSlider(
+                        value = (s.targetBpm ?: source).toFloat().coerceIn(low, high),
+                        onValueChange = { raw ->
+                            val snapped = (raw * 1000).roundToInt() / 1000.0
+                            // A detent at the source tempo, for the same reason the
+                            // semitone slider has one at zero.
+                            val v = if (abs(snapped - source) < source * 0.002) source else snapped
+                            onChange { it.copy(targetBpm = v) }
+                        },
+                        valueRange = low..high,
+                        modifier = Modifier.weight(1f).testTag("bpmSlider"),
+                    )
+                }
             }
 
             if (source == null || source <= 0.0) {
@@ -1024,6 +1000,47 @@ internal fun PitchStrip(
             }
 
         }
+    }
+}
+
+/**
+ * The speed slider, with the MSTR switch beside it.
+ *
+ * # What MSTR means
+ *
+ * There is one speed in the pair, because there is one play head. What the
+ * switch chooses is which loop that speed is *measured against*: on, and the
+ * pair runs at this loop's own tempo, so the other one is pulled to it.
+ *
+ * **Only one of the two cutters can have it on.** Turning it on here turns it
+ * off over there — two loops both claiming to be the reference is not a state
+ * that means anything, so it is not a state that can be reached.
+ *
+ * # Why it releases itself
+ *
+ * It is a mode, and a mode holding a value has to be told when to let go. This
+ * one lets go the moment the speed is moved by hand: drag the slider, type a
+ * tempo, switch units, and MSTR goes out. Anything else would have the switch
+ * quietly putting the tempo back after every drag — the control fighting the
+ * finger, which is the reason this was two buttons before.
+ *
+ * Absent, not greyed, when there is no second loop: with one loop there is
+ * nothing to be master *of*.
+ */
+@Composable
+private fun SpeedRow(
+    master: Boolean?,
+    onMaster: (Boolean) -> Unit,
+    slider: @Composable RowScope.() -> Unit,
+) {
+    if (master == null) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { slider() }
+        return
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Chip("MSTR", master, Modifier.testTag("master")) { onMaster(!master) }
+        Spacer(Modifier.width(8.dp))
+        slider()
     }
 }
 
@@ -1335,6 +1352,16 @@ private fun Toggle(label: String, on: Boolean, onToggle: (Boolean) -> Unit) {
 }
 
 @Composable
-private fun Chip(label: String, selected: Boolean, onClick: () -> Unit) {
-    FilterChip(selected = selected, onClick = onClick, label = { Text(label, fontSize = 12.sp) })
+private fun Chip(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label, fontSize = 12.sp) },
+        modifier = modifier,
+    )
 }
