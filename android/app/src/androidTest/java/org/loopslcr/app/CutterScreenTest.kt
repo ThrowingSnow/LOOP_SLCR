@@ -336,6 +336,32 @@ class CutterScreenTest {
     }
 
     @Test
+    fun the_meter_scale_and_the_trim_are_the_arithmetic_a_hand_expects() {
+        // Two decisions worth pinning, because both are easy to get backwards
+        // and neither is visible in a screenshot.
+        //
+        // The meter is decibels: linear, everything quiet enough to be worth
+        // adjusting sits in the leftmost tenth of the bar and the meter is
+        // decoration. Full scale is the right-hand end, −48 dB the left.
+        assertEquals(1f, meterScale(1f), 0.001f)
+        assertEquals(0f, meterScale(0f), 0.001f)
+        assertTrue("half amplitude is not near the top: ${meterScale(0.5f)}", meterScale(0.5f) in 0.85f..0.9f)
+        assertTrue("a quiet signal vanishes: ${meterScale(0.01f)}", meterScale(0.01f) > 0.1f)
+
+        // The trim is the other way round: the slider is linear in loudness, so
+        // halfway along sounds about half as loud rather than 6 dB down.
+        assertEquals(1f, loudness(1f), 0.001f)
+        assertEquals(0f, loudness(0f), 0.001f)
+        for (position in listOf(0f, 0.25f, 0.5f, 0.75f, 1f)) {
+            assertEquals(position, loudness(fromLoudness(position)), 0.001f)
+        }
+        assertTrue(
+            "halfway is ${decibels(fromLoudness(0.5f))}, which is not about −18 dB",
+            fromLoudness(0.5f) in 0.11f..0.14f,
+        )
+    }
+
+    @Test
     fun folding_the_lanes_halves_the_picture_and_keeps_the_file() {
         // A view, not a setting: the same file, the same cut, half the height —
         // and on a phone that half is the difference between reading the plan

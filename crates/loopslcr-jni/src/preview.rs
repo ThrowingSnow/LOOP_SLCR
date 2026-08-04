@@ -56,6 +56,11 @@ pub struct Handle {
     motion: AtomicU64,
     /// The swap schedule, packed — see [`pack_pair`]. Written by the UI thread.
     pair: AtomicU64,
+    /// The two level trims, as `f32` bits side by side. Written by the UI.
+    gains: AtomicU64,
+    /// The loudest sample each loop contributed to the last block, as `f32`
+    /// bits side by side. Written by the audio thread.
+    peaks: AtomicU64,
     /// Whether a partner is installed and whether it is the one sounding, as
     /// 0/1. Written by the audio thread, so a UI can ask without taking the
     /// mutex the audio thread is holding for the length of a block.
@@ -80,6 +85,8 @@ impl Handle {
             target: AtomicU64::new(1.0f64.to_bits()),
             motion: AtomicU64::new(0),
             pair: AtomicU64::new(0),
+            gains: AtomicU64::new(pack_two(1.0, 1.0)),
+            peaks: AtomicU64::new(0),
             partnered: AtomicU64::new(0),
             on_second: AtomicU64::new(0),
             position: AtomicU64::new(0.0f64.to_bits()),
@@ -112,6 +119,21 @@ impl Handle {
             pack_motion(on, steps, depth, every, shape),
             Ordering::Relaxed,
         );
+    }
+
+    /// Sets the level trim for each loop, linear. Callable from any thread.
+    ///
+    /// Both in one word: set one at a time, the audio thread could read a block
+    /// with the new first gain and the old second one — a momentary balance
+    /// nobody asked for, right where a swap makes it audible.
+    pub fn set_gains(&self, first: f32, second: f32) {
+        self.gains
+            .store(pack_two(first, second), Ordering::Relaxed);
+    }
+
+    /// The loudest sample each loop contributed to the last block, after gain.
+    pub fn peaks(&self) -> (f32, f32) {
+        unpack_two(self.peaks.load(Ordering::Relaxed))
     }
 
     /// Sets or clears the swap schedule. Callable from any thread.
@@ -205,7 +227,12 @@ impl Handle {
         preview.set_target_ratio(f64::from_bits(self.target.load(Ordering::Relaxed)));
         preview.set_motion(unpack_motion(self.motion.load(Ordering::Relaxed)));
         preview.set_pair(unpack_pair(self.pair.load(Ordering::Relaxed)));
+        let (first, second) = unpack_two(self.gains.load(Ordering::Relaxed));
+        preview.set_gains(f64::from(first), f64::from(second));
         let frames = preview.read(out);
+        let (peak_first, peak_second) = preview.peaks();
+        self.peaks
+            .store(pack_two(peak_first, peak_second), Ordering::Relaxed);
         self.position
             .store(preview.position().to_bits(), Ordering::Relaxed);
         self.sounding
@@ -238,7 +265,9 @@ impl Handle {
             .number("sounding", self.sounding())
             .integer("played", self.played() as i64)
             .bool("hasPartner", self.has_partner())
-            .bool("onSecond", self.on_second());
+            .bool("onSecond", self.on_second())
+            .number("peakFirst", f64::from(self.peaks().0))
+            .number("peakSecond", f64::from(self.peaks().1));
         out.render()
     }
 }
@@ -312,6 +341,19 @@ fn unpack_pair(bits: u64) -> Option<Pair> {
         hold_a: (bits >> 16 & 0xFFFF) as u32,
         hold_b: (bits >> 32 & 0xFFFF) as u32,
     })
+}
+
+/// Two `f32` in one word, so a pair of numbers that mean something together
+/// cannot be read half-changed.
+fn pack_two(first: f32, second: f32) -> u64 {
+    u64::from(first.to_bits()) | u64::from(second.to_bits()) << 32
+}
+
+fn unpack_two(bits: u64) -> (f32, f32) {
+    (
+        f32::from_bits((bits & 0xFFFF_FFFF) as u32),
+        f32::from_bits((bits >> 32) as u32),
+    )
 }
 
 /// The highest shape number [`unpack_motion`] knows by name.

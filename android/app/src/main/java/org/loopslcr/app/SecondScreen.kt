@@ -56,6 +56,10 @@ fun SecondScreen(
     onOpen: () -> Unit,
     onDrop: () -> Unit,
     onChange: ((Settings) -> Settings) -> Unit,
+    /** The master speed — the pair's, not this loop's. See below. */
+    master: Settings = Settings(),
+    onMaster: ((Settings) -> Settings) -> Unit = {},
+    onMasterFrom: ((Boolean) -> Unit)? = null,
 ) {
     Column(
         Modifier
@@ -128,6 +132,28 @@ fun SecondScreen(
                     .testTag("secondWave"),
             )
         }
+
+        // The master speed, repeated here rather than left on the other tab.
+        //
+        // It is the *pair's* speed, not this loop's — there is one play head, so
+        // there is one speed — but this is where you are standing when you want
+        // to hear how the second loop sits, and sending someone to another tab
+        // to turn it is how a control stops being used. The MSTR chips choose
+        // which of the two loops it is measured against.
+        Text(
+            "MASTER SPEED",
+            color = Palette.dim,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        PitchStrip(
+            master,
+            firstPlan,
+            first.analysis,
+            onMaster,
+            partnerTempo = plan?.tempo,
+            onMaster = onMasterFrom,
+        )
 
         // The fit, in numbers. This is the one thing worth saying loudest: it is
         // where the pair succeeds or fails, and the numbers are what a user can

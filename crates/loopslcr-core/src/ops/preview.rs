@@ -315,6 +315,16 @@ pub struct Preview {
     /// Which loop is sounding, and which one a crossfade is leaving.
     second: bool,
     was_second: bool,
+    /// Level trim per loop, linear. Two drum loops are rarely mastered to the
+    /// same place, and a swap between them is exactly where that shows.
+    gain_first: f64,
+    gain_second: f64,
+    /// The loudest sample each loop contributed since the last [`read`], after
+    /// its gain. Reset at the start of every block, so a meter polling at
+    /// thirty hertz sees the peak of what it is about to hear rather than an
+    /// average of everything since playback started.
+    peak_first: f32,
+    peak_second: f32,
 }
 
 impl Preview {
@@ -345,6 +355,10 @@ impl Preview {
             piece: u64::MAX,
             second: false,
             was_second: false,
+            gain_first: 1.0,
+            gain_second: 1.0,
+            peak_first: 0.0,
+            peak_second: 0.0,
         }
     }
 
@@ -379,6 +393,25 @@ impl Preview {
 
     pub fn has_partner(&self) -> bool {
         self.partner.is_some()
+    }
+
+    /// Sets the level trim for each loop, linear.
+    ///
+    /// Clamped rather than refused, and never negative: a negative gain is a
+    /// polarity flip wearing a volume control's clothes, which on a swap
+    /// between two loops would be heard as one of them going hollow.
+    pub fn set_gains(&mut self, first: f64, second: f64) {
+        let sane = |g: f64| if g.is_finite() { g.clamp(0.0, 4.0) } else { 1.0 };
+        self.gain_first = sane(first);
+        self.gain_second = sane(second);
+    }
+
+    /// The loudest sample each loop contributed to the last block, after gain.
+    ///
+    /// Zero for a loop that is not sounding, which is the honest reading: with
+    /// a swap running, one of the two genuinely is silent.
+    pub fn peaks(&self) -> (f32, f32) {
+        (self.peak_first, self.peak_second)
     }
 
     /// Whether the second loop is the one being heard right now.
@@ -560,6 +593,11 @@ impl Preview {
         let wanted = out.len() / channels;
         let length = frames as f64;
 
+        // Per block, so a meter sees what it is about to hear rather than the
+        // loudest thing since playback started.
+        self.peak_first = 0.0;
+        self.peak_second = 0.0;
+
         // Hoisted: the grid cannot change inside a block, and this is a division
         // that would otherwise happen once per sample to produce the same
         // number every time.
@@ -635,19 +673,49 @@ impl Preview {
                 _ => &self.buffer,
             };
 
+            let second = self.second;
+            let was_second = self.was_second;
+            let arriving_gain = if second { self.gain_second } else { self.gain_first };
+            let leaving_gain = if was_second { self.gain_second } else { self.gain_first };
+
+            // Metered per side, not per output: during a swap both loops are
+            // contributing, and a meter that saw only the sum could not say
+            // which of them was loud. Kept in locals because the two buffers
+            // are borrowed for the length of this channel loop.
+            let mut from_first = 0.0f32;
+            let mut from_second = 0.0f32;
+            let mut note = |second: bool, value: f64| {
+                let level = value.abs() as f32;
+                if second {
+                    from_second = from_second.max(level);
+                } else {
+                    from_first = from_first.max(level);
+                }
+            };
+
             let base = frame * channels;
             for channel in 0..channels {
-                let sample = self.reader.read(arriving.channel(channel), head, self.ratio);
-                out[base + channel] = match crossing {
+                let sample =
+                    self.reader.read(arriving.channel(channel), head, self.ratio) * arriving_gain;
+                let value = match crossing {
                     Some((old, out_gain, in_gain)) => {
-                        let leaving =
-                            self.reader
-                                .read(leaving_from.channel(channel), old, self.ratio);
-                        (leaving * out_gain + sample * in_gain) as f32
+                        let leaving = self
+                            .reader
+                            .read(leaving_from.channel(channel), old, self.ratio)
+                            * leaving_gain;
+                        note(was_second, leaving * out_gain);
+                        note(second, sample * in_gain);
+                        leaving * out_gain + sample * in_gain
                     }
-                    None => sample as f32,
+                    None => {
+                        note(second, sample);
+                        sample
+                    }
                 };
+                out[base + channel] = value as f32;
             }
+            self.peak_first = self.peak_first.max(from_first);
+            self.peak_second = self.peak_second.max(from_second);
 
             if self.fade_left > 0.0 {
                 self.fade_left -= 1.0;
@@ -1400,6 +1468,82 @@ mod tests {
         let mut out = vec![0.0f32; frames * 2];
         preview.read(&mut out);
         assert!(out.iter().all(|&s| s < -0.4), "it swapped with no hold");
+    }
+
+    #[test]
+    fn the_gain_trims_each_loop_and_the_meter_says_which_one_is_loud() {
+        // Two drum loops are rarely mastered to the same place, and a swap
+        // between them is exactly where that shows. The meter is per loop, not
+        // per output, because "one of these is too loud" is a question about a
+        // loop and the sum cannot answer it.
+        let frames = 4800usize;
+        let mut preview = Preview::new(flat(frames, 0.5), 0.0);
+        preview.set_partner(Some(flat(frames, 0.5))).expect("shape");
+        preview.set_pair(Some(Pair {
+            steps: 2,
+            hold_a: 1,
+            hold_b: 1,
+        }));
+        preview.set_gains(1.0, 0.25);
+
+        // The first half is the first loop at full, the second is the partner
+        // at a quarter.
+        let mut half = vec![0.0f32; (frames / 2) * 2];
+        preview.read(&mut half);
+        let (first, second) = preview.peaks();
+        assert!((first - 0.5).abs() < 0.01, "loop 1 metered {first}");
+        assert!(second < 0.01, "loop 2 metered {second} while silent");
+
+        // A short block to carry the swap and its crossfade. During a fade the
+        // outgoing loop is genuinely still contributing, so a block containing
+        // one legitimately meters both — which is why the reading afterwards is
+        // the one that says the swap finished.
+        let mut across = vec![0.0f32; 512 * 2];
+        preview.read(&mut across);
+
+        preview.read(&mut half[..(frames / 2 - 512) * 2]);
+        let (first, second) = preview.peaks();
+        assert!((second - 0.125).abs() < 0.01, "loop 2 metered {second}");
+        assert!(first < 0.01, "loop 1 metered {first} while silent");
+    }
+
+    #[test]
+    fn a_gain_cannot_be_negative_or_a_nan() {
+        // A negative gain is a polarity flip wearing a volume control's
+        // clothes: on a swap it would be heard as one loop going hollow, which
+        // is not something a level slider should be able to do.
+        let mut preview = Preview::new(flat(1024, 1.0), 0.0);
+        preview.set_gains(-2.0, f64::NAN);
+        let mut out = vec![0.0f32; 64];
+        preview.read(&mut out);
+        assert!(out.iter().all(|&s| s >= 0.0), "the polarity flipped");
+        assert!(out.iter().all(|s| s.is_finite()), "a NaN reached the output");
+    }
+
+    #[test]
+    fn the_meter_reads_the_block_rather_than_the_session() {
+        // A peak that only ever rose would sit pinned at the loudest thing
+        // since playback started and stop being a meter.
+        let frames = 4800usize;
+        let mut preview = Preview::new(
+            AudioBuffer::new(
+                vec![
+                    (0..frames).map(|i| if i < 100 { 0.9 } else { 0.0 }).collect(),
+                    (0..frames).map(|i| if i < 100 { 0.9 } else { 0.0 }).collect(),
+                ],
+                RATE,
+            ),
+            0.0,
+        );
+        let mut out = vec![0.0f32; 200 * 2];
+        preview.read(&mut out);
+        assert!(preview.peaks().0 > 0.5, "the loud part did not register");
+        preview.read(&mut out);
+        assert!(
+            preview.peaks().0 < 0.01,
+            "the meter is still showing {}",
+            preview.peaks().0,
+        );
     }
 
     #[test]

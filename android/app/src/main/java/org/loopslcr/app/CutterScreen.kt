@@ -77,6 +77,8 @@ fun CutterScreen(
     pair: PairSettings = PairSettings(),
     hasSecond: Boolean = false,
     onPair: ((PairSettings) -> PairSettings) -> Unit = {},
+    partnerTempo: Double? = null,
+    onMaster: ((Boolean) -> Unit)? = null,
 ) {
     // One lane or two, and it is a *view*, not a setting: nothing about the file
     // or the cut changes. Folded, the picture is half as tall, and on a phone
@@ -141,7 +143,14 @@ fun CutterScreen(
                     fontSize = 11.sp,
                 )
 
-                PitchStrip(settings, plan, loaded.analysis, onChange)
+                PitchStrip(
+                    settings,
+                    plan,
+                    loaded.analysis,
+                    onChange,
+                    partnerTempo = partnerTempo,
+                    onMaster = onMaster,
+                )
             }
         }
 
@@ -457,7 +466,7 @@ internal fun Section(
 // the app to be pinned on.
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-private fun ThinSlider(
+internal fun ThinSlider(
     value: Float,
     onValueChange: (Float) -> Unit,
     valueRange: ClosedFloatingPointRange<Float>,
@@ -819,11 +828,14 @@ private fun DepthRow(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
  * where it belongs.
  */
 @Composable
-private fun PitchStrip(
+internal fun PitchStrip(
     s: Settings,
     plan: Plan?,
     analysis: Analysis,
     onChange: ((Settings) -> Settings) -> Unit,
+    /** The other loop's tempo, when there is one, for the MSTR chips. */
+    partnerTempo: Double? = null,
+    onMaster: ((Boolean) -> Unit)? = null,
 ) {
     // The source tempo, which is what a target tempo is a ratio *of*. Without
     // it there is no honest slider range, only an invented one.
@@ -914,6 +926,39 @@ private fun PitchStrip(
                 modifier = Modifier.width(74.dp),
                 textAlign = TextAlign.End,
             )
+        }
+    }
+
+    // Which loop the pair is running at. There is only one speed, because there
+    // is only one play head; what this chooses is which loop it is measured
+    // against — press it and the pair is pulled to that loop's own tempo.
+    //
+    // An action rather than a mode. As a mode it would have to re-apply itself
+    // whenever the referenced loop changed, and would then be fighting the next
+    // drag of the tempo slider. Pressed, it sets the target; the chip lights
+    // while the target still matches, and a drag simply moves away from it.
+    if (onMaster != null && partnerTempo != null) {
+        val here = plan?.tempo
+        val matches = { tempo: Double? ->
+            tempo != null && s.speedMode == SpeedMode.TargetBpm &&
+                s.targetBpm?.let { abs(it - tempo) < 0.001 } == true
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "MSTR",
+                color = Palette.dim,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+            Spacer(Modifier.width(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Chip("loop 1${here?.let { "  ${trim(it)}" } ?: ""}", matches(here)) {
+                    onMaster(false)
+                }
+                Chip("loop 2  ${trim(partnerTempo)}", matches(partnerTempo)) {
+                    onMaster(true)
+                }
+            }
         }
     }
 

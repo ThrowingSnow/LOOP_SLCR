@@ -121,6 +121,15 @@ public final class Native {
     public static native void previewSetPartner(
             long handle, ByteBuffer audio, String name, String paramsJson);
 
+    /**
+     * Sets the level trim for each loop, linear.
+     *
+     * <p>Both in one call: set one at a time and the audio thread could read a
+     * block with the new first gain and the old second one, which is a balance
+     * nobody asked for right where a swap makes it audible.
+     */
+    public static native void previewSetGains(long handle, float first, float second);
+
     /** Takes the second loop away. The first keeps playing. */
     public static native void previewClearPartner(long handle);
 

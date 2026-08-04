@@ -226,6 +226,22 @@ class PreviewPlayer {
         }
     }
 
+    /** Sets the level trim for each loop, linear. Lock-free. */
+    fun setGains(first: Float, second: Float) {
+        if (handle != 0L) {
+            runCatching { Native.previewSetGains(handle, first, second) }
+        }
+    }
+
+    /** The loudest sample each loop contributed to the last block, after gain. */
+    fun peaks(): Pair<Float, Float> {
+        if (handle == 0L) return 0f to 0f
+        return runCatching {
+            val info = JSONObject(Native.previewInfo(handle))
+            info.getDouble("peakFirst").toFloat() to info.getDouble("peakSecond").toFloat()
+        }.getOrDefault(0f to 0f)
+    }
+
     fun clearPartner() {
         if (handle != 0L) {
             runCatching { Native.previewClearPartner(handle) }

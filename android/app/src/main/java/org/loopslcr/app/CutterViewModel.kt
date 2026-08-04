@@ -179,6 +179,9 @@ class CutterViewModel : ViewModel() {
                 pushMotion()
                 pushPair()
                 pushPartner()
+                // The gains live in the handle too, and a fresh one starts at
+                // unity — so a level the user set would silently jump back.
+                player.setGains(_gains.value.first, _gains.value.second)
             } else {
                 _problem.value = problem
             }
@@ -340,6 +343,37 @@ class CutterViewModel : ViewModel() {
                 _secondProblem.value = explain(e, "the second loop cannot be cut that way")
             }
         }
+    }
+
+    // --- the mixer ---------------------------------------------------------
+
+    private val _gains = MutableStateFlow(1f to 1f)
+    val gains: StateFlow<Pair<Float, Float>> = _gains.asStateFlow()
+
+    fun setGains(first: Float, second: Float) {
+        _gains.value = first to second
+        player.setGains(first, second)
+    }
+
+    /** The loudest sample each loop contributed to the last block, after gain. */
+    fun levels(): Pair<Float, Float> = player.peaks()
+
+    /**
+     * Pulls the pair to one loop's tempo.
+     *
+     * An action, not a mode, and the difference matters. As a mode it would have
+     * to re-apply itself whenever the referenced loop changed, which means
+     * fighting the next drag of the tempo slider. Pressed, it sets the target;
+     * the chip lights while the target still matches, and a drag simply moves
+     * away from it without anything having to be un-chosen.
+     *
+     * There is only one speed in the pair, because there is only one play head.
+     * What this chooses is which loop it is measured against.
+     */
+    fun masterFrom(second: Boolean) {
+        val tempo = if (second) _secondPlan.value?.tempo else _plan.value?.tempo
+        tempo ?: return
+        update { it.copy(speedMode = SpeedMode.TargetBpm, targetBpm = tempo) }
     }
 
     private val _motion = MutableStateFlow(MotionSettings())

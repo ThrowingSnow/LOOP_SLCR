@@ -42,7 +42,7 @@ pub mod preview;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use jni::objects::{JByteBuffer, JClass, JString};
-use jni::sys::{jboolean, jbyteArray, jdouble, jfloatArray, jint, jlong, jstring};
+use jni::sys::{jboolean, jbyteArray, jdouble, jfloat, jfloatArray, jint, jlong, jstring};
 use jni::JNIEnv;
 
 /// The exception thrown for every failure. See the module docs for why this one.
@@ -414,6 +414,26 @@ pub extern "system" fn Java_org_loopslcr_Native_previewSetPair<'a>(
             hold_a.max(0) as u32,
             hold_b.max(0) as u32,
         );
+        Ok(())
+    })
+}
+
+/// `previewSetGains(long handle, float first, float second)`.
+///
+/// Lock-free; safe from any thread.
+///
+/// # Safety
+/// Called by the JVM with valid arguments; not to be called from Rust.
+#[no_mangle]
+pub extern "system" fn Java_org_loopslcr_Native_previewSetGains<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    handle_value: jlong,
+    first: jfloat,
+    second: jfloat,
+) {
+    guard(&mut env, (), |_| {
+        handle(handle_value)?.set_gains(first, second);
         Ok(())
     })
 }

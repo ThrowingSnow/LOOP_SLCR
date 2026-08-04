@@ -175,6 +175,7 @@ class MainActivity : ComponentActivity() {
                 val secondSettings by model.secondSettings.collectAsState()
                 val secondPlan by model.secondPlan.collectAsState()
                 val secondProblem by model.secondProblem.collectAsState()
+                val gains by model.gains.collectAsState()
                 val calculator by model.calculator.collectAsState()
                 val sums by model.sums.collectAsState()
                 val calculatorProblem by model.calculatorProblem.collectAsState()
@@ -204,12 +205,15 @@ class MainActivity : ComponentActivity() {
                             Text("CUTTER 2", Modifier.padding(10.dp), fontSize = 12.sp)
                         }
                         Tab(tab == 2, onClick = { tab = 2 }) {
+                            Text("MIX", Modifier.padding(10.dp), fontSize = 12.sp)
+                        }
+                        Tab(tab == 3, onClick = { tab = 3 }) {
                             Text("CALC", Modifier.padding(10.dp), fontSize = 12.sp)
                         }
                         // A gear rather than a word: it is another destination
-                        // but not another quarter of the app, and equal billing
+                        // but not another fifth of the app, and equal billing
                         // would say otherwise.
-                        Tab(tab == 3, onClick = { tab = 3 }) {
+                        Tab(tab == 4, onClick = { tab = 4 }) {
                             Text("\u2699", Modifier.padding(10.dp), fontSize = 16.sp)
                         }
                     }
@@ -228,6 +232,8 @@ class MainActivity : ComponentActivity() {
                             pair = pair,
                             hasSecond = second != null,
                             onPair = { change -> model.setPair(change) },
+                            partnerTempo = secondPlan?.tempo,
+                            onMaster = { fromSecond -> model.masterFrom(fromSecond) },
                             onPlay = { model.togglePlay() },
                             onDragMarker = { marker, at -> model.dragMarker(marker, at) },
                             onOpen = {
@@ -257,9 +263,21 @@ class MainActivity : ComponentActivity() {
                             onOpen = { openSecondFile.launch(arrayOf("*/*")) },
                             onDrop = { model.dropSecond() },
                             onChange = { change -> model.updateSecond(change) },
+                            master = settings,
+                            onMaster = { change -> model.update(change) },
+                            onMasterFrom = { fromSecond -> model.masterFrom(fromSecond) },
                         )
 
-                        3 -> SettingsScreen(
+                        2 -> MixerScreen(
+                            first = loaded,
+                            second = second,
+                            gains = gains,
+                            levels = { model.levels() },
+                            playing = playing,
+                            onGains = { a, b -> model.setGains(a, b) },
+                        )
+
+                        4 -> SettingsScreen(
                             engineVersion = Engine.version,
                             build = BuildConfig.VERSION_NAME,
                         )
