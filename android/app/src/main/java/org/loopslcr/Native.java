@@ -139,6 +139,26 @@ public final class Native {
      */
     public static native void previewSetMasterGain(long handle, float gain);
 
+    /**
+     * Sets the insert on the sum: a filter and an overdrive, in either order.
+     *
+     * <p>{@code mode} is 0 off, 1 lowpass, 2 highpass, 3 bandpass. {@code route}
+     * is 0 filter first, 1 drive first. {@code cutoff} is in hertz;
+     * {@code resonance}, {@code drive} run 0 to 1; {@code output} is a linear
+     * trim after both.
+     *
+     * <p>Every knob in one call, for the same reason the two loop gains are:
+     * the audio thread must never run a block with half a change in it.
+     */
+    public static native void previewSetFx(
+            long handle,
+            int mode,
+            float cutoff,
+            float resonance,
+            int route,
+            float drive,
+            float output);
+
     /** Takes the second loop away. The first keeps playing. */
     public static native void previewClearPartner(long handle);
 

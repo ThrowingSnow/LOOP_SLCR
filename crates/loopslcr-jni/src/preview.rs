@@ -35,6 +35,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+use loopslcr_core::ops::fx::{FxSettings, Mode as FxMode, Route};
 use loopslcr_core::ops::preview::{Motion, Pair, Preview, Shape, DEFAULT_GLIDE_MS};
 use loopslcr_core::pipeline;
 use loopslcr_core::wav::Wav;
@@ -58,6 +59,16 @@ pub struct Handle {
     pair: AtomicU64,
     /// The two level trims, as `f32` bits side by side. Written by the UI.
     gains: AtomicU64,
+    /// The insert, in two words — see [`pack_filter`] and [`pack_drive`].
+    ///
+    /// Two rather than one because six fields do not fit in sixty-four bits, and
+    /// two rather than the mutex because the mutex is held by the audio thread
+    /// for the length of a block. Unlike the motion, a block that saw the new
+    /// cutoff with the old resonance is harmless: every field here is a
+    /// continuous knob whose values are each independently valid, so a torn read
+    /// is a position the hand passed through, not a setting nobody chose.
+    fx_filter: AtomicU64,
+    fx_drive: AtomicU64,
     /// The trim on the sum, as `f32` bits. Written by the UI.
     ///
     /// Its own word rather than a third field beside the two loop gains, which
@@ -97,6 +108,8 @@ impl Handle {
             motion: AtomicU64::new(0),
             pair: AtomicU64::new(0),
             gains: AtomicU64::new(pack_two(1.0, 1.0)),
+            fx_filter: AtomicU64::new(pack_filter(0, 1_000.0, 0.0, 0)),
+            fx_drive: AtomicU64::new(pack_two(0.0, 1.0)),
             master_gain: AtomicU64::new(u64::from(1.0f32.to_bits())),
             peaks: AtomicU64::new(0),
             peak_master: AtomicU64::new(0),
@@ -142,6 +155,19 @@ impl Handle {
     pub fn set_gains(&self, first: f32, second: f32) {
         self.gains
             .store(pack_two(first, second), Ordering::Relaxed);
+    }
+
+    /// Sets the insert. Callable from any thread.
+    ///
+    /// `mode` and `route` are numbers rather than enums because they come from
+    /// Java, where they are ordinals; an unknown one becomes the harmless
+    /// choice rather than an error, for the same reason an unknown motion shape
+    /// does — the audio thread is the last place to start reporting faults.
+    pub fn set_fx(&self, mode: u32, cutoff: f32, resonance: f32, route: u32, drive: f32, output: f32) {
+        self.fx_filter
+            .store(pack_filter(mode, cutoff, resonance, route), Ordering::Relaxed);
+        self.fx_drive
+            .store(pack_two(drive, output), Ordering::Relaxed);
     }
 
     /// Sets the trim on the sum, linear. Callable from any thread.
@@ -253,6 +279,10 @@ impl Handle {
         preview.set_pair(unpack_pair(self.pair.load(Ordering::Relaxed)));
         let (first, second) = unpack_two(self.gains.load(Ordering::Relaxed));
         preview.set_gains(f64::from(first), f64::from(second));
+        preview.set_fx(unpack_fx(
+            self.fx_filter.load(Ordering::Relaxed),
+            self.fx_drive.load(Ordering::Relaxed),
+        ));
         preview.set_master_gain(f64::from(f32::from_bits(
             self.master_gain.load(Ordering::Relaxed) as u32,
         )));
@@ -329,6 +359,45 @@ fn pack_motion(on: bool, steps: u32, depth: u32, every: u32, shape: u32) -> u64 
         | u64::from(depth) << 16
         | u64::from(shape) << 32
         | u64::from(every) << 36
+}
+
+/// The filter half of the insert: cutoff, resonance, mode, route.
+///
+/// The cutoff keeps all thirty-two of its bits because it is the one a hand
+/// sweeps and a coarse step in it is audible as a staircase. The resonance is
+/// quantised to a sixteenth-bit of its range, which is four decimal places on a
+/// knob that has two.
+fn pack_filter(mode: u32, cutoff: f32, resonance: f32, route: u32) -> u64 {
+    let resonance = if resonance.is_nan() { 0.0 } else { resonance };
+    let quantised = (resonance.clamp(0.0, 1.0) * f32::from(u16::MAX)) as u16;
+    u64::from(cutoff.to_bits()) << 32
+        | u64::from(quantised) << 16
+        // Out of range means off, and means it here rather than three layers
+        // down. Masking instead would turn a number nobody sent into a mode
+        // somebody appears to have chosen.
+        | u64::from(if mode > 3 { 0 } else { mode }) << 8
+        | u64::from(if route > 1 { 0 } else { route })
+}
+
+fn unpack_fx(filter: u64, drive: u64) -> FxSettings {
+    let (drive, output) = unpack_two(drive);
+    FxSettings {
+        mode: match filter >> 8 & 0xFF {
+            1 => FxMode::LowPass,
+            2 => FxMode::HighPass,
+            3 => FxMode::BandPass,
+            _ => FxMode::Off,
+        },
+        cutoff_hz: f64::from(f32::from_bits((filter >> 32) as u32)),
+        resonance: f64::from((filter >> 16 & 0xFFFF) as u16) / f64::from(u16::MAX),
+        drive: f64::from(drive),
+        output: f64::from(output),
+        route: if filter & 0xFF == 1 {
+            Route::DriveFirst
+        } else {
+            Route::FilterFirst
+        },
+    }
 }
 
 fn unpack_motion(bits: u64) -> Option<Motion> {
@@ -442,6 +511,52 @@ mod tests {
             },
         )
         .expect("could not encode the test loop")
+    }
+
+    #[test]
+    fn the_insert_survives_the_two_words_it_crosses_in() {
+        // What goes into the atomics has to come out the other side as the same
+        // panel. A cutoff that arrived a few hertz off would be inaudible and a
+        // route that arrived flipped would not be, so both are checked.
+        let packed = pack_filter(2, 640.0, 0.5, 1);
+        let settings = unpack_fx(packed, pack_two(0.75, 0.5));
+        assert_eq!(settings.mode, FxMode::HighPass);
+        assert_eq!(settings.route, Route::DriveFirst);
+        assert_eq!(settings.cutoff_hz, 640.0);
+        assert!((settings.resonance - 0.5).abs() < 1e-4, "{}", settings.resonance);
+        assert_eq!(settings.drive, 0.75);
+        assert_eq!(settings.output, 0.5);
+
+        // Numbers Java could send that name nothing become the harmless choice
+        // rather than whatever their low bits happen to spell.
+        let odd = unpack_fx(pack_filter(99, 1_000.0, -1.0, 99), pack_two(0.0, 1.0));
+        assert_eq!(odd.mode, FxMode::Off);
+        assert_eq!(odd.route, Route::FilterFirst);
+        assert_eq!(odd.resonance, 0.0);
+    }
+
+    #[test]
+    fn a_handle_that_is_asked_for_a_filter_plays_through_it() {
+        let handle = create(&loop_file(8), "200 loop.wav", "{}").expect("no handle");
+        let mut out = vec![0.0f32; 4_096];
+
+        handle.read(&mut out);
+        let plain = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(plain > 0.01, "silence came out");
+
+        // A highpass far above the test tone, which is a slow sine — what is
+        // left of it should be very little.
+        handle.set_fx(2, 4_000.0, 0.0, 0, 0.0, 1.0);
+        handle.read(&mut out);
+        handle.read(&mut out);
+        let filtered = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(filtered < plain * 0.2, "{plain} became {filtered}");
+
+        // And switching it off gives the sound back, through the same handle.
+        handle.set_fx(0, 4_000.0, 0.0, 0, 0.0, 1.0);
+        handle.read(&mut out);
+        let again = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(again > plain * 0.8, "{plain} came back as {again}");
     }
 
     #[test]

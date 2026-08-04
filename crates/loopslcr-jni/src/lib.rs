@@ -457,6 +457,43 @@ pub extern "system" fn Java_org_loopslcr_Native_previewSetMasterGain<'a>(
     })
 }
 
+/// `previewSetFx(long handle, int mode, float cutoff, float resonance,
+/// int route, float drive, float output)`.
+///
+/// The insert on the sum: a filter and an overdrive, in whichever order `route`
+/// names. `mode` is 0 off, 1 lowpass, 2 highpass, 3 bandpass; `route` is 0
+/// filter first, 1 drive first. Everything at once rather than a call per knob,
+/// so the audio thread never runs a block with half a change in it. Lock-free;
+/// safe from any thread.
+///
+/// # Safety
+/// Called by the JVM with valid arguments; not to be called from Rust.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_org_loopslcr_Native_previewSetFx<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    handle_value: jlong,
+    mode: jint,
+    cutoff: jfloat,
+    resonance: jfloat,
+    route: jint,
+    drive: jfloat,
+    output: jfloat,
+) {
+    guard(&mut env, (), |_| {
+        handle(handle_value)?.set_fx(
+            mode.max(0) as u32,
+            cutoff,
+            resonance,
+            route.max(0) as u32,
+            drive,
+            output,
+        );
+        Ok(())
+    })
+}
+
 /// `previewSetPartner(long handle, ByteBuffer audio, String name, String params)`.
 ///
 /// Runs the pipeline, so it takes as long as a cut and belongs on a background
