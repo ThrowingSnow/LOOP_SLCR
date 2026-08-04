@@ -1223,3 +1223,49 @@ beziehungsweise `short by N`. Eine Karte, die „clips" verschlucken kann, wäre
 schlechter als eine, die sich nicht zuklappen lässt — denn die verborgene Zahl
 war der Grund hinzusehen. Gegen eine blind gemachte Karte laufen gelassen:
 `AssertionError: Failed: assertExists.`
+
+## 26. Ein Release-Build, der die falsche Wahrheit meldete
+
+Gemeldet als „ist immer noch wie vorher". Es war auch so: der Release-Build hatte
+`BUILD SUCCESSFUL` gemeldet und das APK des *vorherigen* Commits ausgeliefert.
+
+Das verräterische Zeichen war da und wurde übersehen — **exakt dieselbe
+Byte-Zahl** wie beim Build davor, obwohl neue Zeichenketten hinzugekommen waren.
+Zwei gleich große Artefakte aus zwei verschiedenen Commits sind kein Zufall,
+sondern eine Meldung.
+
+Nachgewiesen wurde es, indem das APK selbst gefragt wurde statt der Erfolgs-
+meldung. Wichtig dabei: `strings` auf das APK anzuwenden findet **nichts**, weil
+das DEX im Zip komprimiert liegt — erst entpacken, dann suchen:
+
+```console
+$ unzip -q -o app-release.apk 'classes*.dex'
+$ strings classes*.dex | grep -F "Open another file"
+```
+
+Vorher fehlte die Zeichenkette, nach einem `clean` war sie da.
+
+Daraus zwei bleibende Änderungen:
+
+- **`versionName` trägt den Commit.** `0.1.0+339ab7a`, aus `git rev-parse` beim
+  Bauen, sichtbar in der Info-Klappbox neben der Engine-Version. Wenn „ist das
+  der neue Build?" eine Frage ist, kostet Raten mehr Zeit als Hinschreiben.
+- **Die Regel für mich: einer Erfolgsmeldung nicht glauben, wenn das Ergebnis
+  prüfbar ist.** Bei einem APK ist es prüfbar.
+
+## 27. Der Pitch-Regler wandert unter die Waveform
+
+Er ist das einzige Bedienelement, das man *während des Hörens* festhält, und lag
+fünf faltbare Gruppen tief in einer scrollenden Spalte — ihn zu benutzen schob
+also genau das Bild aus dem Blick, auf das er wirkt. Jetzt steht er direkt unter
+der Waveform, mit seinem Wert und dem Zieltempo daneben.
+
+Der Rest der Varispeed bleibt in seinem Abschnitt: Modus, die drei Einheiten,
+das Zieltempo-Feld. Das sind Dinge, die man *liest*, nicht festhält. Und der
+Streifen erscheint nur im Halbton-Modus — ein Zieltempo wird getippt, nicht
+gewischt, und ein Regler, der unter der Waveform auftaucht und wieder
+verschwindet, wäre schlimmer als einer, der an seinem Platz bleibt.
+
+Der Test dazu prüft **Sichtbarkeit ohne Scrollen**, nicht rohe Koordinaten: ein
+aus dem Sichtfeld gescrollter Knoten meldet Null, und ein Vergleich gegen Null
+wäre aus dem falschen Grund durchgegangen — was er beim ersten Versuch auch tat.

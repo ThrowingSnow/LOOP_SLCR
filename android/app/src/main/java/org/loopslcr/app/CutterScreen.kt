@@ -108,6 +108,8 @@ fun CutterScreen(
             fontSize = 11.sp,
         )
 
+        PitchStrip(settings, plan, onChange)
+
         // The file's own figures now live behind the name in [Header]; what
         // stays on screen is what a *decision* is made from. They were three
         // panels deep before the first control, and a screen you have to scroll
@@ -338,6 +340,9 @@ private fun Facts(a: Analysis) {
             Fact("peak", "%.4f".format(a.peak))
             Fact("tempo", a.tempo?.let { trim(it) + " BPM" } ?: "unknown")
             Fact("loop", a.loopBars?.let { "$it bars (${a.workflow})" } ?: "unclear")
+            // Which build this is. Printed rather than guessed at — see the
+            // note on `versionName` in build.gradle.kts.
+            Fact("build", BuildConfig.VERSION_NAME + " · engine " + Engine.version)
             if (a.tailFrames > 0) Fact("tail", "${a.tailFrames} frames below the floor")
         }
     }
@@ -614,6 +619,60 @@ private fun DepthRow(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
 }
 
 /**
+ * The pitch slider, directly under the waveform.
+ *
+ * It is the one control held *while listening*, and it was five folded groups
+ * down a scrolling column — so using it pushed the picture it acts on off the
+ * top of the screen. Everything else about the varispeed (the mode, the three
+ * unit readouts, the target tempo field) stays in its section, because those are
+ * read rather than held.
+ *
+ * Only in semitone mode. A target tempo is typed, not swept, and a slider that
+ * appeared and vanished under the waveform would be worse than one that sits
+ * where it belongs.
+ */
+@Composable
+private fun PitchStrip(s: Settings, plan: Plan?, onChange: ((Settings) -> Settings) -> Unit) {
+    if (s.speedMode != SpeedMode.Semitones) return
+
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "pitch",
+            color = Palette.dim,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+        )
+        Text(
+            "  %+.2f st".format(s.semitones),
+            color = if (s.semitones == 0.0) Palette.dim else Palette.text,
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+        )
+        if (plan != null && plan.ratio != 1.0) {
+            Text(
+                "   → ${trim(plan.resultingTempo)} BPM",
+                color = if (plan.ratioExact) Palette.dim else Palette.warn,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+    }
+    Slider(
+        value = s.semitones.toFloat(),
+        onValueChange = { raw ->
+            // A detent at unity, because "no change" has to be reachable with a
+            // finger. Without it every drag leaves a ratio of 1.003 that costs a
+            // resample and buys nothing.
+            val v = raw.toDouble()
+            val snapped = if (abs(v) < DETENT_SEMITONES) 0.0 else (v * 100).roundToInt() / 100.0
+            onChange { it.copy(semitones = snapped) }
+        },
+        valueRange = -12f..12f,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+/**
  * The varispeed, and what it means in the three units people think in.
  *
  * Semitones for a musician, per cent for a tape machine, BPM for a sequencer.
@@ -650,21 +709,10 @@ private fun SpeedControls(s: Settings, plan: Plan?, onChange: ((Settings) -> Set
     }
 
     when (s.speedMode) {
-        SpeedMode.Semitones -> {
-            Fact("pitch", "%+.2f st".format(s.semitones))
-            Slider(
-                value = s.semitones.toFloat(),
-                onValueChange = { raw ->
-                    // A detent at unity, because "no change" has to be reachable
-                    // with a finger. Without it every drag leaves a ratio of
-                    // 1.003 that costs a resample and buys nothing.
-                    val v = raw.toDouble()
-                    val snapped = if (abs(v) < DETENT_SEMITONES) 0.0 else (v * 100).roundToInt() / 100.0
-                    onChange { it.copy(semitones = snapped) }
-                },
-                valueRange = -12f..12f,
-            )
-        }
+        // The slider itself lives under the waveform now — see [PitchStrip].
+        // What stays here is everything you set once and read, rather than the
+        // one control you hold while listening.
+        SpeedMode.Semitones -> Unit
         SpeedMode.TargetBpm -> {
             var text by remember(s.speedMode) { mutableStateOf(s.targetBpm?.let(::trim) ?: "") }
             OutlinedTextField(

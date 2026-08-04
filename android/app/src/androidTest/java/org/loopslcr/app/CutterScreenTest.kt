@@ -4,7 +4,9 @@ import android.graphics.Bitmap
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -170,6 +172,47 @@ class CutterScreenTest {
 
         compose.onNodeWithText("cut").assertDoesNotExist()
         compose.onNodeWithText("clips", substring = true).assertExists()
+    }
+
+    @Test
+    fun the_pitch_slider_sits_under_the_waveform_not_in_a_folded_group() {
+        // It is the one control held *while listening*, so it has to be within
+        // sight of the picture it acts on. Checked by geometry rather than by
+        // reading the source: "under the waveform" is a claim about pixels.
+        val raw = EngineTest.wav(bars = 8)
+        val analysis = Engine.analyze(org.loopslcr.Native.direct(raw), "200 loop.wav")
+        val peaks = Engine.peaks(org.loopslcr.Native.direct(raw), 512)
+        val plan = Engine.plan(org.loopslcr.Native.direct(raw), "200 loop.wav", Settings())
+
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.wave)) {
+                CutterScreen(
+                    loaded = Loaded(name, org.loopslcr.Native.direct(raw), analysis, peaks),
+                    settings = Settings(semitones = -3.0),
+                    plan = plan,
+                    busy = Busy.Idle,
+                    problem = null,
+                    onOpen = {},
+                    onExport = {},
+                    onChange = {},
+                    onDismissProblem = {},
+                )
+            }
+        }
+
+        // The claim is "reachable while watching the waveform", so the check is
+        // that it is in the viewport *without scrolling* — together with the
+        // line that sits directly under the waveform. Comparing raw bounds
+        // against the VARISPEED header does not work: a node scrolled out of
+        // view reports zero, which would pass for the wrong reason.
+        compose.onNodeWithText("pitch").assertIsDisplayed()
+        compose.onNodeWithText("drag a marker", substring = true).assertIsDisplayed()
+
+        val pitch = compose.onNodeWithText("pitch").getBoundsInRoot()
+        val hint = compose.onNodeWithText("drag a marker", substring = true).getBoundsInRoot()
+        assertTrue("pitch at ${pitch.top}, hint at ${hint.top}", pitch.top > hint.top)
+
+        compose.onNodeWithText("-3.00 st", substring = true).assertExists()
     }
 
     @Test

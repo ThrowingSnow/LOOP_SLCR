@@ -69,7 +69,18 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "0.1.0"
+        // The commit this APK was built from, shown in the app.
+        //
+        // Not decoration. A release build once reported BUILD SUCCESSFUL and
+        // shipped the previous commit's APK — the tell was an output of exactly
+        // the same byte count as the build before it, which is easy to miss and
+        // was missed. When "is this the new one?" is a question, guessing at it
+        // wastes far more time than printing the answer.
+        versionName = "0.1.0+" + (
+            providers.exec {
+                commandLine("git", "rev-parse", "--short", "HEAD")
+            }.standardOutput.asText.get().trim().ifEmpty { "unknown" }
+            )
         ndk { abiFilters += abis }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -127,7 +138,8 @@ android {
         compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) }
     }
 
-    buildFeatures { compose = true }
+    // `buildConfig` so the app can show which commit it was built from.
+    buildFeatures { compose = true; buildConfig = true }
 
     /**
      * `./gradlew -PtestRelease connectedAndroidTest` runs the suite against the
