@@ -42,6 +42,7 @@
 use core::f64::consts::FRAC_PI_2;
 
 use crate::buffer::AudioBuffer;
+use crate::ops::fx::{Fx, FxSettings};
 use crate::ops::resample::{Edge, SincResampler};
 
 /// How far the rate may be pushed in either direction.
@@ -319,6 +320,12 @@ pub struct Preview {
     /// same place, and a swap between them is exactly where that shows.
     gain_first: f64,
     gain_second: f64,
+    /// The insert on the sum: a filter and an overdrive, in whichever order the
+    /// panel asks for. It sits after both loop gains and before the master
+    /// fader, which is where an insert goes on a desk — the fader is the last
+    /// thing the signal touches, so that the number under your hand is the
+    /// number that leaves.
+    fx: Fx,
     /// The trim on the sum, after both loop gains. A console's master fader:
     /// it moves what leaves, not what either loop contributes, which is why the
     /// two loop meters do not follow it.
@@ -343,6 +350,7 @@ impl Preview {
     /// offline path, this one has a deadline.
     pub fn new(buffer: AudioBuffer, glide_ms: f64) -> Self {
         let rate = buffer.sample_rate();
+        let channels = buffer.channel_count();
         Preview {
             buffer,
             reader: SincResampler::fast().with_edge(Edge::Wrap),
@@ -364,6 +372,7 @@ impl Preview {
             was_second: false,
             gain_first: 1.0,
             gain_second: 1.0,
+            fx: Fx::new(channels, rate),
             gain_master: 1.0,
             peak_first: 0.0,
             peak_second: 0.0,
@@ -421,6 +430,19 @@ impl Preview {
     /// decides how loud that balance leaves. Folding it into them would mean a
     /// master move rewriting both channel faders, which is a console that lies
     /// about where its own levels are.
+    /// Sets the insert. Cheap enough to call every block, and meant to be.
+    ///
+    /// Whole settings at a time rather than one knob at a time, so a block never
+    /// runs with half a change in it. See [`FxSettings`].
+    pub fn set_fx(&mut self, settings: FxSettings) {
+        self.fx.set(settings);
+    }
+
+    /// What the insert is set to.
+    pub fn fx(&self) -> FxSettings {
+        self.fx.settings()
+    }
+
     pub fn set_master_gain(&mut self, gain: f64) {
         self.gain_master = sane_gain(gain);
     }
@@ -628,6 +650,10 @@ impl Preview {
         self.peak_second = 0.0;
         self.peak_master = 0.0;
 
+        // Asked once per block, not once per sample: the panel cannot move
+        // while a block is being filled.
+        let wire = self.fx.is_wire();
+
         // Hoisted: the grid cannot change inside a block, and this is a division
         // that would otherwise happen once per sample to produce the same
         // number every time.
@@ -742,7 +768,15 @@ impl Preview {
                         sample
                     }
                 };
-                let left = value * self.gain_master;
+                // The insert, then the fader. `is_wire` rather than a filter at
+                // a harmless setting: a session that never opens the FX panel
+                // gets the samples it would have got before there was one.
+                let inserted = if wire {
+                    value
+                } else {
+                    self.fx.process(channel, value)
+                };
+                let left = inserted * self.gain_master;
                 out[base + channel] = left as f32;
                 self.peak_master = self.peak_master.max(left.abs() as f32);
             }
@@ -1585,6 +1619,42 @@ mod tests {
             (preview.master_peak() - 0.25).abs() < 0.01,
             "the master meter did not: {}",
             preview.master_peak(),
+        );
+    }
+
+    #[test]
+    fn the_insert_sits_after_the_loop_meters_and_before_the_fader() {
+        // Where a box is in the chain is not a detail, it is what the box means.
+        // A steady level through a highpass has to fall away — and the channel
+        // meters, which read what each loop contributed, must not notice, while
+        // the master meter, which reads what left, must.
+        let frames = 4800usize;
+        let mut preview = Preview::new(flat(frames, 0.5), 0.0);
+        let mut out = vec![0.0f32; frames * 2];
+
+        preview.set_fx(FxSettings {
+            mode: crate::ops::fx::Mode::HighPass,
+            cutoff_hz: 1_000.0,
+            ..FxSettings::default()
+        });
+        preview.read(&mut out);
+
+        let tail = out[out.len() / 2..].iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(tail < 0.01, "a highpass left a steady level at {tail}");
+
+        let (contributed, _) = preview.peaks();
+        assert!(
+            (contributed - 0.5).abs() < 0.01,
+            "the channel meter followed the insert: {contributed}",
+        );
+
+        // And off is off: the same preview, the filter taken out, is the signal
+        // again to the last bit.
+        preview.set_fx(FxSettings::default());
+        preview.read(&mut out);
+        assert!(
+            out.iter().all(|&s| s == 0.5),
+            "an insert switched off did not give the signal back",
         );
     }
 
