@@ -408,8 +408,10 @@ worth exactly as much as its regression check.
   - [x] **MIX tab** — per-loop trim and a per-loop peak meter. Metered per
         loop rather than per output, because with a swap running only one of
         them is sounding
-  - [x] Master speed on both cutters, with MSTR chips choosing which loop the
-        one speed is measured against
+  - [x] Master speed on both cutters, with one MSTR switch per cutter beside
+        the speed slider choosing which loop the one speed is measured
+        against — at most one deck at a time, and released by any hand-moved
+        speed so the mode never fights the finger
   - [ ] Export the pair (needs the swap in exact rational frames, like the
         motion, and a decision about what a two-loop file even is)
   - [ ] **FX tab: delay and reverb.** Its own milestone — the audio path may

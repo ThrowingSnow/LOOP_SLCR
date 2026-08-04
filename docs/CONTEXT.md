@@ -1611,15 +1611,34 @@ beginnt — es ist eine musikalische Wahl, kein Fehler. Also steht es da.
 Gewünscht: das Master-Tempo auch auf CUTTER 2, und wählen können, von welchem
 Loop die Geschwindigkeit genommen wird.
 
-**Es gibt nur eine Geschwindigkeit, weil es nur einen Lesekopf gibt.** Was die
-`MSTR`-Chips wählen, ist, *woran* sie gemessen wird: gedrückt ziehen sie das
-Paar auf das Eigentempo dieses Loops.
+**Es gibt nur eine Geschwindigkeit, weil es nur einen Lesekopf gibt.** Was der
+`MSTR`-Schalter wählt, ist, *woran* sie gemessen wird: eingeschaltet läuft das
+Paar auf dem Eigentempo dieses Loops, der andere wird also dorthin gezogen.
 
-Bewusst eine **Aktion, kein Modus**. Als Modus müsste er sich jedes Mal neu
-anwenden, wenn sich das Bezugstempo ändert — und läge damit im Streit mit dem
-nächsten Zug am Tempo-Regler. Gedrückt setzt er das Ziel; der Chip leuchtet,
-solange das Ziel noch passt, und ein Zug bewegt sich einfach davon weg, ohne
-dass etwas ab-gewählt werden müsste.
+**Ein Schalter neben dem Regler, keine zwei Buttons.** Zuerst waren es zwei
+Chips, die beide Loops benannten, auf einer eigenen Zeile. Das kostete eine
+Zeile für eine Auskunft, die ein einzelner Schalter gibt, und ließ die Wahl
+aussehen, als gehöre sie dem Paar statt der Seite, auf der man steht. Jetzt
+trägt jeder Cutter ein `[MSTR]` an seinem eigenen Geschwindigkeitsregler.
+
+**Höchstens einer kann an sein.** Hier an heißt dort aus — zwei Bezugspunkte
+sind kein Zustand, der etwas bedeutet, also ist es kein Zustand, der erreichbar
+ist. Ohne zweiten Loop fehlt der Schalter ganz, statt tot dazustehen: mit einem
+Loop gibt es nichts, wovon man Master wäre.
+
+**Jetzt ein Modus — und einer, der von selbst loslässt.** Als reine Aktion
+konnte er ein Tempo, das sich später ändert, nicht mitnehmen. Als Modus, der
+festhält, läge er im Streit mit dem nächsten Zug am Regler. Beides zusammen geht
+nur mit einer Regel: *eine Hand am Tempo schlägt den Schalter.* Sobald die
+Geschwindigkeit nicht mehr das Tempo dieses Loops ist — Regler gezogen, Tempo
+getippt, Einheit gewechselt — geht `MSTR` aus, statt die Zahl zurückzuschreiben.
+
+Beide Hälften stellen dieselbe Frage, und die steht deshalb als eine Funktion da
+(`holdsTempo`): das Anwenden fragt sie, um nicht neu zu setzen, was schon da ist
+— sonst löst ein fertiger Plan ein Update aus, das einen Plan auslöst —, das
+Loslassen fragt sie, um die Hand zu bemerken. Verglichen wird auf Milli-BPM, die
+Auflösung, auf die der Tempo-Regler einrastet; enger verglichen ginge der
+Bezugspunkt bei einem Rundungsschritt verloren, den niemand gemacht hat.
 
 Der Varispeed-Streifen steht jetzt auf beiden Cuttern. Dieselbe Einstellung,
 zwei Orte — weil man auf CUTTER 2 steht, wenn man hören will, wie der zweite
