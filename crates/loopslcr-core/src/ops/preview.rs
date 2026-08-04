@@ -319,12 +319,19 @@ pub struct Preview {
     /// same place, and a swap between them is exactly where that shows.
     gain_first: f64,
     gain_second: f64,
+    /// The trim on the sum, after both loop gains. A console's master fader:
+    /// it moves what leaves, not what either loop contributes, which is why the
+    /// two loop meters do not follow it.
+    gain_master: f64,
     /// The loudest sample each loop contributed since the last [`read`], after
     /// its gain. Reset at the start of every block, so a meter polling at
     /// thirty hertz sees the peak of what it is about to hear rather than an
     /// average of everything since playback started.
     peak_first: f32,
     peak_second: f32,
+    /// The loudest sample that actually left, after the master gain. This is
+    /// the only one of the three that can say the output is clipping.
+    peak_master: f32,
 }
 
 impl Preview {
@@ -357,8 +364,10 @@ impl Preview {
             was_second: false,
             gain_first: 1.0,
             gain_second: 1.0,
+            gain_master: 1.0,
             peak_first: 0.0,
             peak_second: 0.0,
+            peak_master: 0.0,
         }
     }
 
@@ -401,9 +410,19 @@ impl Preview {
     /// polarity flip wearing a volume control's clothes, which on a swap
     /// between two loops would be heard as one of them going hollow.
     pub fn set_gains(&mut self, first: f64, second: f64) {
-        let sane = |g: f64| if g.is_finite() { g.clamp(0.0, 4.0) } else { 1.0 };
-        self.gain_first = sane(first);
-        self.gain_second = sane(second);
+        self.gain_first = sane_gain(first);
+        self.gain_second = sane_gain(second);
+    }
+
+    /// Sets the trim on the sum, linear, with the same clamp as the loops.
+    ///
+    /// Separate from [`set_gains`](Preview::set_gains) because it is a separate
+    /// decision: the loop gains balance the two against each other, and this one
+    /// decides how loud that balance leaves. Folding it into them would mean a
+    /// master move rewriting both channel faders, which is a console that lies
+    /// about where its own levels are.
+    pub fn set_master_gain(&mut self, gain: f64) {
+        self.gain_master = sane_gain(gain);
     }
 
     /// The loudest sample each loop contributed to the last block, after gain.
@@ -412,6 +431,16 @@ impl Preview {
     /// a swap running, one of the two genuinely is silent.
     pub fn peaks(&self) -> (f32, f32) {
         (self.peak_first, self.peak_second)
+    }
+
+    /// The loudest sample that left in the last block, after the master gain.
+    ///
+    /// Post-fader, unlike the loop meters, which are post-*their* fader and
+    /// pre-master. That is the console arrangement, and it is the useful one:
+    /// the channel meters keep saying which loop is loud while the master says
+    /// whether what leaves is too loud.
+    pub fn master_peak(&self) -> f32 {
+        self.peak_master
     }
 
     /// Whether the second loop is the one being heard right now.
@@ -597,6 +626,7 @@ impl Preview {
         // loudest thing since playback started.
         self.peak_first = 0.0;
         self.peak_second = 0.0;
+        self.peak_master = 0.0;
 
         // Hoisted: the grid cannot change inside a block, and this is a division
         // that would otherwise happen once per sample to produce the same
@@ -712,7 +742,9 @@ impl Preview {
                         sample
                     }
                 };
-                out[base + channel] = value as f32;
+                let left = value * self.gain_master;
+                out[base + channel] = left as f32;
+                self.peak_master = self.peak_master.max(left.abs() as f32);
             }
             self.peak_first = self.peak_first.max(from_first);
             self.peak_second = self.peak_second.max(from_second);
@@ -740,6 +772,20 @@ impl Preview {
 
         self.played += wanted as u64;
         wanted
+    }
+}
+
+/// A level trim that cannot be trusted from the outside, made safe.
+///
+/// Clamped rather than refused, and never negative: a negative gain is a
+/// polarity flip wearing a volume control's clothes, which on a swap between
+/// two loops would be heard as one of them going hollow. A NaN would silence
+/// the output permanently, and no fader position asks for that.
+fn sane_gain(gain: f64) -> f64 {
+    if gain.is_finite() {
+        gain.clamp(0.0, 4.0)
+    } else {
+        1.0
     }
 }
 
@@ -1505,6 +1551,62 @@ mod tests {
         let (first, second) = preview.peaks();
         assert!((second - 0.125).abs() < 0.01, "loop 2 metered {second}");
         assert!(first < 0.01, "loop 1 metered {first} while silent");
+    }
+
+    #[test]
+    fn the_master_moves_what_leaves_and_not_what_the_loops_contribute() {
+        // A console's master fader. The channel meters stay post-*their* fader
+        // and pre-master, so pulling the master down does not make the mix look
+        // rebalanced — only the master meter follows it, and it is the only one
+        // that can say the output is clipping.
+        let frames = 2400usize;
+        let mut preview = Preview::new(flat(frames, 0.5), 0.0);
+        let mut out = vec![0.0f32; frames * 2];
+
+        preview.read(&mut out);
+        let (loud, _) = preview.peaks();
+        assert!((loud - 0.5).abs() < 0.01, "loop 1 metered {loud} at unity");
+        assert!(
+            (preview.master_peak() - 0.5).abs() < 0.01,
+            "the master metered {} at unity",
+            preview.master_peak(),
+        );
+
+        preview.set_master_gain(0.5);
+        preview.read(&mut out);
+        let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!((peak - 0.25).abs() < 0.01, "half the master gave {peak}");
+        let (still, _) = preview.peaks();
+        assert!(
+            (still - 0.5).abs() < 0.01,
+            "the channel meter followed the master: {still}",
+        );
+        assert!(
+            (preview.master_peak() - 0.25).abs() < 0.01,
+            "the master meter did not: {}",
+            preview.master_peak(),
+        );
+    }
+
+    #[test]
+    fn a_master_gain_cannot_be_negative_or_a_nan() {
+        // Same reason as the loop gains: a negative gain is a polarity flip
+        // wearing a volume control's clothes, and a NaN is silence that no
+        // fader position asks for.
+        let frames = 1200usize;
+        let mut preview = Preview::new(flat(frames, 0.5), 0.0);
+        let mut out = vec![0.0f32; frames * 2];
+
+        preview.set_master_gain(-2.0);
+        preview.read(&mut out);
+        assert!(out.iter().all(|&s| s == 0.0), "a negative master passed audio");
+
+        preview.set_master_gain(f64::NAN);
+        preview.read(&mut out);
+        assert!(
+            out.iter().all(|&s| (s - 0.5).abs() < 0.01),
+            "a NaN master did not fall back to unity",
+        );
     }
 
     #[test]
