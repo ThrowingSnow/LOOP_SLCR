@@ -1512,3 +1512,48 @@ Zwei Regeln daraus:
   darf das als „nichts zu tun" behandeln, und dann ist „installiert, nichts
   geändert" nicht mehr von einem alten APK zu unterscheiden. Er steht neben dem
   Namen im Zahnrad-Reiter.
+
+## 34. Zwei Einheiten auf einer Zeile
+
+Der Varispeed war eine Knopfreihe *und* eine Anzeigereihe — zwei Zeilen eines
+Bildschirms, dessen ganzes Layout dafür da ist, die Waveform im Blick zu halten,
+und die getippte Zahl lag einen Regler von der Zahl entfernt, die sie erzeugt.
+
+Jetzt trägt jeder Modusknopf seinen eigenen Wert direkt hinter sich, beide auf
+einer Zeile: links `semitones` mit den Halbtönen, rechts `target BPM` mit dem
+Tempo. **Beide Anzeigen stehen immer da** — die gedimmte ist abgeleitet, die
+helle ist die, die man gerade fährt. Die andere Einheit beim Ziehen mitlaufen
+zu sehen ist der halbe Grund, überhaupt zwei Einheiten zu haben.
+
+Die alte Regel „das Feld ist ein Viertel des Streifens" fällt mit dem Layout,
+das sie beschrieb: dieses Feld hatte eine eigene Zeile, das neue teilt sie sich
+mit zwei Knöpfen und der anderen Einheit.
+
+## 35. Die Rate ist eine Einheit, keine Einstellung
+
+Raster und Rate waren ein Regler. Damit hieß „Landungen auf halben Schlägen"
+zwangsläufig auch „Stottern im Halbschlag-Takt" — die feine Auflösung war bei
+keinem musikalischen Tempo brauchbar.
+
+Getrennt: das **Raster** sagt, *wo* ein Sprung landen darf, die **Rate** sagt,
+*wie oft* einer passiert. Beide werden pro Takt gezählt, und genau das ist das
+ganze „beatsync" — keine Einstellung, sondern eine Einheit. Es gibt in diesem
+Modell keine Zahl, die zwischen zwei Schläge fallen könnte. Die Rate ist nie
+feiner als das Raster; ein gröberes Raster zieht sie mit.
+
+Dazu eine fünfte Form: **`walk`**, ein Random Walk statt eines unabhängigen
+`scatter`. Benachbarte Züge bleiben nahe beieinander, eine Phrase überlebt das
+Verschieben. Er wird bei jedem Zug von vorn durchgelaufen statt in einem Feld
+mitgeführt — ein Feld würde ihn von der Vorgeschichte abhängig machen, und
+Vorgeschichte ist genau das, was den Loop kaputtmacht. Kosten: `index`
+Schritte, höchstens einmal pro Zug, auf einem Index, der jede Runde neu bei
+null anfängt.
+
+## 36. Eine Spur statt zwei
+
+Neben Play sitzt `2ch` / `1ch`. Es ist eine **Ansicht**, keine Einstellung —
+weder Datei noch Schnitt ändern sich, nur 84 dp statt 150.
+
+Gefaltet zeigt die Spur die **Hüllkurve** beider Kanäle, nicht ihre Summe: eine
+Summe löscht sich überall dort aus, wo die Kanäle sich widersprechen, und würde
+eine leise Stelle über Material zeichnen, das bloß breit ist.

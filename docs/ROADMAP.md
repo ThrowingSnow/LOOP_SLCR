@@ -356,8 +356,10 @@ worth exactly as much as its regression check.
   - [x] Zoom — two fingers to magnify, one to pan; 4096 buckets measured once
         at load and spent by the zoom, so `MAX_ZOOM` is bound to the
         measurement rather than to taste
-  - [x] Compact rows; the typed tempo rides the varispeed strip beside the
-        speed it sets rather than sitting a slider away from it
+  - [x] Compact rows; each varispeed unit sits behind its own button on one
+        shared row, the inactive one dimmed rather than hidden
+  - [x] One-lane waveform view beside Play — the envelope of both channels,
+        not their sum
   - [ ] BPM detector — only the 14 archive files carrying no tempo need it
   - [x] Draggable markers — they snap to bar lines, which is the only way a
         finger is allowed near a cut point; with handles, and a line that
@@ -393,8 +395,15 @@ worth exactly as much as its regression check.
         rearranged and still repeats exactly once per loop. Four shapes, the
         scattered one a hash of the step index rather than a generator.
         Crossfaded 4 ms at equal power. Preview only: it never reaches the file
+  - [x] Motion rate separate from the motion grid — the grid says where a
+        jump lands, the rate how often one happens; both counted per bar, so
+        there is no number that could fall between two beats
+  - [x] `walk` shape: a random walk rather than an independent scatter
   - [ ] Bake the motion into an export (needs the displacement in exact
         rational frames, not the preview's floats)
+  - [ ] **A second loop, and an LFO that switches between the two** — one
+        shared phase, the swap on a grid boundary, so both stay in time.
+        Wants CUTTER 1 / CUTTER 2 tabs and a second file in the view model
   - [ ] Draggable play head (seek exists; nothing drives it from the waveform yet)
 - [x] Dark theme
 - [x] Instrumented tests: the engine on a real Android runtime, the screen rendered
