@@ -150,6 +150,7 @@ class CutterViewModel : ViewModel() {
      */
     fun togglePlay() {
         if (_playing.value) {
+            partnering?.cancel()
             player.stop()
             _playing.value = false
             playingSettings = null
@@ -172,8 +173,12 @@ class CutterViewModel : ViewModel() {
                 playingSettings = wanted
                 // A fresh handle knows nothing about the motion the user left
                 // switched on, and a control that silently stops applying when
-                // playback restarts reads as a broken control.
+                // playback restarts reads as a broken control. The same goes
+                // for the second loop, which lives in the handle and dies with
+                // it.
                 pushMotion()
+                pushPair()
+                pushPartner()
             } else {
                 _problem.value = problem
             }
@@ -189,6 +194,153 @@ class CutterViewModel : ViewModel() {
      * left to right while the loop jumped around underneath it.
      */
     fun playPosition(): Double? = player.sounding()
+
+    // --- the second loop ---------------------------------------------------
+    //
+    // A whole second deck would be two of everything; this is deliberately not
+    // that. The second loop has no varispeed and no export of its own, because
+    // it does not have a length of its own: it is pulled to the first loop's
+    // tempo and bar count so the two can share one play head. What it does have
+    // is a file, a plan, and which part of it to use.
+
+    private val _second = MutableStateFlow<Loaded?>(null)
+    val second: StateFlow<Loaded?> = _second.asStateFlow()
+
+    private val _secondSettings = MutableStateFlow(Settings())
+    val secondSettings: StateFlow<Settings> = _secondSettings.asStateFlow()
+
+    private val _secondPlan = MutableStateFlow<Plan?>(null)
+    val secondPlan: StateFlow<Plan?> = _secondPlan.asStateFlow()
+
+    /** What went wrong with the second loop, which is usually its length. */
+    private val _secondProblem = MutableStateFlow<String?>(null)
+    val secondProblem: StateFlow<String?> = _secondProblem.asStateFlow()
+
+    private val _pair = MutableStateFlow(PairSettings())
+    val pair: StateFlow<PairSettings> = _pair.asStateFlow()
+
+    private var partnering: Job? = null
+
+    /**
+     * The parameters that make the second file fit the first.
+     *
+     * This is the whole trick, and it is only possible because both tempi are
+     * known exactly: the second loop is cut to the *first* loop's bar count and
+     * pulled to the first loop's own tempo, with the same exact rational
+     * arithmetic as any other cut. What comes out is the same number of frames,
+     * so one play head can serve both.
+     *
+     * The first loop's *source* tempo, not its target: the preview plays the cut
+     * at its own tempo and the varispeed is applied live to the whole handle, so
+     * both loops are already moving together by the time a ratio is involved.
+     */
+    private fun partnerSettings(): Settings? {
+        val mine = _plan.value ?: return null
+        val theirs = _secondSettings.value
+        if (mine.bars <= 0) return null
+        return theirs.copy(
+            bars = mine.bars,
+            speedMode = SpeedMode.TargetBpm,
+            targetBpm = mine.tempo,
+            snap = false,
+        )
+    }
+
+    fun openSecond(name: String, bytes: ByteBuffer) {
+        viewModelScope.launch {
+            _busy.value = Busy.Working("reading $name")
+            try {
+                val loaded = withContext(Dispatchers.Default) {
+                    val analysis = Engine.analyze(bytes, name)
+                    Loaded(name, bytes, analysis, Engine.peaks(bytes, BUCKETS))
+                }
+                _second.value = loaded
+                _secondSettings.value = Settings()
+                _secondProblem.value = null
+                planSecond()
+                pushPartner()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                _second.value = null
+                _secondPlan.value = null
+                _secondProblem.value = explain(e, "could not read the second file")
+            } finally {
+                _busy.value = Busy.Idle
+            }
+        }
+    }
+
+    fun updateSecond(change: (Settings) -> Settings) {
+        _secondSettings.update(change)
+        planSecond()
+        pushPartner()
+    }
+
+    fun dropSecond() {
+        partnering?.cancel()
+        _second.value = null
+        _secondPlan.value = null
+        _secondProblem.value = null
+        _pair.update { it.copy(on = false) }
+        player.clearPartner()
+        pushPair()
+    }
+
+    fun setPair(change: (PairSettings) -> PairSettings) {
+        _pair.update(change)
+        pushPair()
+    }
+
+    private fun pushPair() {
+        val p = _pair.value
+        val steps = p.steps(_plan.value?.bars)
+        if (steps == null) {
+            player.setPair(false, 0, 1, 1)
+            return
+        }
+        player.setPair(p.on, steps, p.holdA, p.holdB)
+    }
+
+    /**
+     * Builds the second loop against the first and hands it to the audio.
+     *
+     * Queued behind the same lock the preview build uses: both run the pipeline,
+     * and two pipeline runs at once on a phone is how the tape sliders once made
+     * the loop play over itself.
+     */
+    private fun pushPartner() {
+        val file = _second.value ?: return
+        val wanted = partnerSettings() ?: return
+        if (!_playing.value) return
+        partnering?.cancel()
+        partnering = viewModelScope.launch {
+            val problem = building.withLock {
+                withContext(Dispatchers.Default) {
+                    player.setPartner(file.bytes, file.name, wanted)
+                }
+            }
+            _secondProblem.value = problem
+            if (problem == null) pushPair()
+        }
+    }
+
+    private fun planSecond() {
+        val file = _second.value ?: return
+        val wanted = partnerSettings() ?: _secondSettings.value
+        viewModelScope.launch {
+            try {
+                _secondPlan.value = withContext(Dispatchers.Default) {
+                    Engine.plan(file.bytes, file.name, wanted)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                _secondPlan.value = null
+                _secondProblem.value = explain(e, "the second loop cannot be cut that way")
+            }
+        }
+    }
 
     private val _motion = MutableStateFlow(MotionSettings())
     val motion: StateFlow<MotionSettings> = _motion.asStateFlow()
@@ -283,8 +435,11 @@ class CutterViewModel : ViewModel() {
                     playingSettings = wanted
                     // Same reason as in `togglePlay`, and also because the loop
                     // may now be a different number of bars — which is a
-                    // different grid for the same setting.
+                    // different grid for the same setting, and a different
+                    // length for the second loop to be cut to.
                     pushMotion()
+                    pushPair()
+                    pushPartner()
                 } else {
                     _playing.value = false
                     playingSettings = null
@@ -297,6 +452,7 @@ class CutterViewModel : ViewModel() {
             // grid is the loop divided — so the same setting is a different
             // number of pieces and has to be re-sent.
             pushMotion()
+            pushPair()
         }
     }
 

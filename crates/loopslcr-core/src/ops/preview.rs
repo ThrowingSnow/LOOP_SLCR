@@ -143,6 +143,53 @@ pub struct Motion {
     pub shape: Shape,
 }
 
+/// Two loops, swapped on the grid.
+///
+/// # What it is
+///
+/// A second loop of exactly the same length, read at exactly the same phase.
+/// The swap changes only *which buffer* the play head reads from — the head
+/// itself keeps running — so bar three of one loop is followed by bar four of
+/// the other, in time, without either loop being restarted.
+///
+/// # Why the phase is shared rather than synchronised
+///
+/// There is nothing to synchronise. Two clocks kept in step is a thing that can
+/// drift, and a drift of a few samples per pass is exactly the artefact this
+/// tool exists to remove. One clock cannot drift from itself.
+///
+/// That is what makes the length requirement absolute rather than fussy: the
+/// partner must be the same number of frames as the loop it joins, or "the same
+/// phase" stops meaning anything. Matching it is not a guess — both tempi are
+/// known exactly, so the second loop is pulled to the first with the same exact
+/// rational arithmetic as any other cut.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Pair {
+    /// The loop divided into this many equal pieces, for the swap to land on.
+    ///
+    /// Its own grid rather than the motion's: the two are independent, and a
+    /// swap is useful with no motion running at all.
+    pub steps: u32,
+    /// How many pieces to stay on the first loop.
+    pub hold_a: u32,
+    /// How many pieces to stay on the second.
+    pub hold_b: u32,
+}
+
+impl Pair {
+    /// Whether piece `index` belongs to the second loop.
+    ///
+    /// A function of the index, like everything else here, so the alternation
+    /// repeats when the loop does.
+    pub fn on_second(&self, index: u64) -> bool {
+        let cycle = u64::from(self.hold_a) + u64::from(self.hold_b);
+        if cycle == 0 || self.hold_b == 0 {
+            return false;
+        }
+        index % cycle >= u64::from(self.hold_a)
+    }
+}
+
 /// How long a jump takes to cross over, in milliseconds.
 ///
 /// Short enough not to smear a transient, long enough to cover a step edge.
@@ -257,6 +304,17 @@ pub struct Preview {
     /// Output frames left in the crossfade, and how long it was.
     fade_left: f64,
     fade_length: f64,
+    /// The second loop, when there is one. Guaranteed by [`set_partner`] to be
+    /// the same shape as [`buffer`](Preview::buffer) — the phase is shared, so
+    /// a partner of a different length is not a partner.
+    partner: Option<AudioBuffer>,
+    pair: Option<Pair>,
+    /// The piece the swap grid is in, so a boundary can be noticed. Separate
+    /// from [`step`](Preview::step), which counts the motion's own slots.
+    piece: u64,
+    /// Which loop is sounding, and which one a crossfade is leaving.
+    second: bool,
+    was_second: bool,
 }
 
 impl Preview {
@@ -282,7 +340,98 @@ impl Preview {
             previous: 0.0,
             fade_left: 0.0,
             fade_length: (JUMP_FADE_MS * 0.001 * f64::from(rate)).max(1.0),
+            partner: None,
+            pair: None,
+            piece: u64::MAX,
+            second: false,
+            was_second: false,
         }
+    }
+
+    /// Gives the preview a second loop to swap with, or takes it away.
+    ///
+    /// **The length, rate and channel count must match exactly.** Not a
+    /// fussiness: the two are read at one shared phase, and a partner of a
+    /// different length has no shared phase to be read at. Refused rather than
+    /// stretched, because stretching it here would silently undo the exactness
+    /// the rest of the tool is built on — the caller knows both tempi and can
+    /// ask the pipeline for a partner that fits.
+    pub fn set_partner(&mut self, partner: Option<AudioBuffer>) -> Result<(), &'static str> {
+        let Some(buffer) = partner else {
+            self.partner = None;
+            if self.second {
+                self.swap_to(false);
+            }
+            return Ok(());
+        };
+        if buffer.frames() != self.buffer.frames() {
+            return Err("the second loop is a different length");
+        }
+        if buffer.channel_count() != self.buffer.channel_count() {
+            return Err("the second loop has a different number of channels");
+        }
+        if buffer.sample_rate() != self.buffer.sample_rate() {
+            return Err("the second loop has a different sample rate");
+        }
+        self.partner = Some(buffer);
+        Ok(())
+    }
+
+    pub fn has_partner(&self) -> bool {
+        self.partner.is_some()
+    }
+
+    /// Whether the second loop is the one being heard right now.
+    pub fn on_second(&self) -> bool {
+        self.second
+    }
+
+    pub fn pair(&self) -> Option<Pair> {
+        self.pair
+    }
+
+    /// Sets or clears the swap schedule.
+    ///
+    /// Like [`set_motion`](Preview::set_motion), it lands at the next piece
+    /// boundary rather than immediately — a swap in the middle of a beat is the
+    /// one thing this feature exists not to do.
+    pub fn set_pair(&mut self, pair: Option<Pair>) {
+        let pair = pair.filter(|p| p.steps > 0);
+        if pair == self.pair {
+            return;
+        }
+        self.pair = pair;
+        if pair.is_none() && self.second {
+            self.swap_to(false);
+        }
+        self.piece = u64::MAX;
+    }
+
+    /// Starts a crossfade from one loop to the other.
+    fn swap_to(&mut self, second: bool) {
+        if second == self.second {
+            return;
+        }
+        self.begin_fade();
+        self.second = second;
+    }
+
+    /// Remembers what is being left, and starts the crossfade.
+    ///
+    /// One fade covers both a jump and a swap, because on a boundary where both
+    /// happen there is only one discontinuity to hide — two overlapping fades
+    /// would each be hiding half of it.
+    ///
+    /// Mid-fade the outgoing signal is already a mixture, so what is captured
+    /// stays whatever the fade was already leaving. Capturing the current
+    /// values there would restart the move that is still in progress and leave
+    /// the fade chasing itself.
+    fn begin_fade(&mut self) {
+        if self.fade_left <= 0.0 {
+            self.previous = self.displacement;
+            self.was_second = self.second;
+        }
+        self.fade_left = self.fade_length;
     }
 
     pub fn channel_count(&self) -> usize {
@@ -352,16 +501,8 @@ impl Preview {
         if displacement == self.displacement {
             return;
         }
-        // Mid-fade, the thing being faded *out* is what is currently sounding,
-        // which is already a mixture. Taking the outgoing side as the previous
-        // displacement rather than the current one would restart the old jump.
-        self.previous = if self.fade_left > 0.0 {
-            self.previous
-        } else {
-            self.displacement
-        };
+        self.begin_fade();
         self.displacement = displacement;
-        self.fade_left = self.fade_length;
     }
 
     /// The rate being played right now, which may still be gliding.
@@ -426,6 +567,10 @@ impl Preview {
             .motion
             .map(|m| length / f64::from(m.steps))
             .unwrap_or(0.0);
+        let pair_frames = self
+            .pair
+            .map(|p| length / f64::from(p.steps))
+            .unwrap_or(0.0);
 
         for frame in 0..wanted {
             // Glide first, so the rate used for this sample is the one the
@@ -452,6 +597,20 @@ impl Preview {
                 }
             }
 
+            // The swap runs on its own grid, because it is useful with no
+            // motion at all — and when both land on the same boundary, one
+            // crossfade covers the pair. See `begin_fade`.
+            if let Some(pair) = self.pair {
+                if pair_frames > 0.0 {
+                    let piece = (self.position / pair_frames) as u64;
+                    if piece != self.piece {
+                        self.piece = piece;
+                        let want = self.partner.is_some() && pair.on_second(piece);
+                        self.swap_to(want);
+                    }
+                }
+            }
+
             let head = (self.position + self.displacement).rem_euclid(length);
             // Equal power, not linear: the two sides of a jump are unrelated
             // audio, and a linear fade between uncorrelated signals dips in the
@@ -464,13 +623,26 @@ impl Preview {
                 None
             };
 
+            // Which loop each side of the fade reads from. Two field borrows
+            // rather than one selected buffer, so the resampler — another
+            // field — can still be borrowed mutably beside them.
+            let arriving = match (self.second, self.partner.as_ref()) {
+                (true, Some(partner)) => partner,
+                _ => &self.buffer,
+            };
+            let leaving_from = match (self.was_second, self.partner.as_ref()) {
+                (true, Some(partner)) => partner,
+                _ => &self.buffer,
+            };
+
             let base = frame * channels;
             for channel in 0..channels {
-                let source = self.buffer.channel(channel);
-                let sample = self.reader.read(source, head, self.ratio);
+                let sample = self.reader.read(arriving.channel(channel), head, self.ratio);
                 out[base + channel] = match crossing {
                     Some((old, out_gain, in_gain)) => {
-                        let leaving = self.reader.read(source, old, self.ratio);
+                        let leaving =
+                            self.reader
+                                .read(leaving_from.channel(channel), old, self.ratio);
                         (leaving * out_gain + sample * in_gain) as f32
                     }
                     None => sample as f32,
@@ -482,6 +654,7 @@ impl Preview {
                 if self.fade_left <= 0.0 {
                     self.fade_left = 0.0;
                     self.previous = self.displacement;
+                    self.was_second = self.second;
                 }
             }
 
@@ -1050,6 +1223,183 @@ mod tests {
             assert!(walk.offset(i) <= 7, "reached {} of 7", walk.offset(i));
             assert_eq!(walk.offset(i), walk.offset(i));
         }
+    }
+
+    // --- the second loop ----------------------------------------------------
+
+    /// A loop whose every sample is `value`, so which buffer is sounding can be
+    /// read straight off the output.
+    fn flat(frames: usize, value: f64) -> AudioBuffer {
+        AudioBuffer::new(vec![vec![value; frames], vec![value; frames]], RATE)
+    }
+
+    #[test]
+    fn the_swap_alternates_between_the_two_loops_on_the_grid() {
+        // The feature, at its plainest: one loop of −0.5 and one of +0.5, so the
+        // output says which one is playing at every sample. Four pieces, two on
+        // each — the first half of the loop from one, the second from the other.
+        let frames = 4800usize;
+        let mut preview = Preview::new(flat(frames, -0.5), 0.0);
+        preview
+            .set_partner(Some(flat(frames, 0.5)))
+            .expect("the partner is the same shape");
+        preview.set_pair(Some(Pair {
+            steps: 4,
+            hold_a: 2,
+            hold_b: 2,
+        }));
+
+        let mut out = vec![0.0f32; frames * 2];
+        preview.read(&mut out);
+
+        // Sampled well clear of the crossfades at the piece boundaries.
+        let at = |fraction: f64| out[(frames as f64 * fraction) as usize * 2];
+        assert!(at(0.1) < -0.4, "the first quarter is not the first loop");
+        assert!(at(0.4) < -0.4, "the second quarter is not the first loop");
+        assert!(at(0.6) > 0.4, "the third quarter is not the second loop");
+        assert!(at(0.9) > 0.4, "the last quarter is not the second loop");
+    }
+
+    #[test]
+    fn the_swap_keeps_one_clock_rather_than_two() {
+        // Why the phase is shared and not synchronised: there is one play head,
+        // and swapping changes only which buffer it reads. Two clocks kept in
+        // step is a thing that can drift, and a drift of a few samples per pass
+        // is the artefact this tool exists to remove.
+        let frames = 2400usize;
+        let mut preview = Preview::new(sine(frames), 0.0);
+        preview
+            .set_partner(Some(sine(frames)))
+            .expect("the partner is the same shape");
+        preview.set_pair(Some(Pair {
+            steps: 8,
+            hold_a: 1,
+            hold_b: 1,
+        }));
+
+        let mut out = vec![0.0f32; frames * 2];
+        preview.read(&mut out);
+        assert!(
+            preview.position().abs() < 1e-9,
+            "one pass left the head at {}",
+            preview.position(),
+        );
+    }
+
+    #[test]
+    fn a_partner_of_the_wrong_shape_is_refused_rather_than_stretched() {
+        // Stretching it here would silently undo the exactness the rest of the
+        // tool is built on. The caller knows both tempi and can ask the pipeline
+        // for a partner that fits — this is the wrong layer to guess at one.
+        let mut preview = Preview::new(sine(4800), 0.0);
+        assert!(preview.set_partner(Some(sine(2400))).is_err(), "length");
+        assert!(
+            preview
+                .set_partner(Some(AudioBuffer::new(vec![vec![0.0; 4800]], RATE)))
+                .is_err(),
+            "channels",
+        );
+        assert!(
+            preview
+                .set_partner(Some(AudioBuffer::new(
+                    vec![vec![0.0; 4800], vec![0.0; 4800]],
+                    RATE * 2,
+                )))
+                .is_err(),
+            "sample rate",
+        );
+        assert!(!preview.has_partner(), "a refused partner was kept anyway");
+    }
+
+    #[test]
+    fn the_pair_repeats_with_the_loop_like_everything_else_here() {
+        let frames = 4800usize;
+        let mut preview = Preview::new(sine(frames), 0.0);
+        preview
+            .set_partner(Some(flat(frames, 0.3)))
+            .expect("the partner is the same shape");
+        preview.set_pair(Some(Pair {
+            steps: 8,
+            hold_a: 3,
+            hold_b: 1,
+        }));
+
+        let mut cold = vec![0.0f32; frames * 2];
+        let mut second = vec![0.0f32; frames * 2];
+        let mut third = vec![0.0f32; frames * 2];
+        preview.read(&mut cold);
+        preview.read(&mut second);
+        preview.read(&mut third);
+        for (i, (a, b)) in second.iter().zip(third.iter()).enumerate() {
+            assert!((a - b).abs() < 1e-6, "differs at {i}: {a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn a_swap_crossfades_like_a_jump_does() {
+        // Two loops at opposite polarity is the worst case there is: a bare
+        // swap steps the whole amplitude in one sample.
+        let frames = 4800usize;
+        let biggest_step = |paired: bool| {
+            let mut preview = Preview::new(flat(frames, -0.5), 0.0);
+            if paired {
+                preview.set_partner(Some(flat(frames, 0.5))).expect("shape");
+                preview.set_pair(Some(Pair {
+                    steps: 8,
+                    hold_a: 4,
+                    hold_b: 4,
+                }));
+            }
+            let mut out = vec![0.0f32; frames * 2];
+            preview.read(&mut out);
+            out.chunks(2)
+                .zip(out.chunks(2).skip(1))
+                .fold(0.0f32, |worst, (a, b)| worst.max((b[0] - a[0]).abs()))
+        };
+
+        let swapped = biggest_step(true);
+        assert!(
+            swapped < 0.2,
+            "a swap stepped by {swapped} of a 1.0 span in one sample",
+        );
+    }
+
+    #[test]
+    fn taking_the_partner_away_leaves_the_first_loop_playing() {
+        let frames = 2400usize;
+        let mut preview = Preview::new(flat(frames, -0.5), 0.0);
+        preview.set_partner(Some(flat(frames, 0.5))).expect("shape");
+        preview.set_pair(Some(Pair {
+            steps: 4,
+            hold_a: 1,
+            hold_b: 3,
+        }));
+        let mut out = vec![0.0f32; frames * 2];
+        preview.read(&mut out);
+        assert!(preview.on_second(), "the second loop never came in");
+
+        preview.set_partner(None).expect("removing one always works");
+        preview.read(&mut out);
+        assert!(!preview.on_second(), "still on a partner that is gone");
+        assert!(
+            out.iter().all(|&s| s < -0.4),
+            "something other than the first loop is playing",
+        );
+    }
+
+    #[test]
+    fn a_pair_with_no_second_half_never_swaps() {
+        let frames = 2400usize;
+        let mut preview = Preview::new(flat(frames, -0.5), 0.0);
+        preview.set_partner(Some(flat(frames, 0.5))).expect("shape");
+        preview.set_pair(Some(Pair {
+            steps: 4,
+            hold_a: 4,
+            hold_b: 0,
+        }));
+        let mut out = vec![0.0f32; frames * 2];
+        preview.read(&mut out);
+        assert!(out.iter().all(|&s| s < -0.4), "it swapped with no hold");
     }
 
     #[test]

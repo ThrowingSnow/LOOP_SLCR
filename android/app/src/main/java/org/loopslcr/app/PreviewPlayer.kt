@@ -194,6 +194,51 @@ class PreviewPlayer {
         }
     }
 
+    /** Sets the swap schedule between the loop and its partner. Lock-free. */
+    fun setPair(on: Boolean, steps: Int, holdA: Int, holdB: Int) {
+        if (handle != 0L) {
+            runCatching { Native.previewSetPair(handle, on, steps, holdA, holdB) }
+        }
+    }
+
+    /**
+     * Gives the running preview a second loop.
+     *
+     * Runs the pipeline, so it belongs on a background thread — and returns the
+     * complaint rather than throwing, because "that loop is 352 800 frames
+     * against 344 000" is a message in the UI, not a crash.
+     *
+     * Not `@Synchronized`: the native side does its own building outside its
+     * lock, and holding the monitor here would make a stop wait for a pipeline
+     * run. What it does need is a handle that is still open, which is the same
+     * check every other call makes.
+     */
+    fun setPartner(audio: ByteBuffer, name: String, settings: Settings): String? {
+        val open = handle
+        if (open == 0L) return "nothing is playing to add a second loop to"
+        return try {
+            Native.previewSetPartner(open, audio, name, settings.toJson())
+            null
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            explain(e, "the second loop could not be used")
+        }
+    }
+
+    fun clearPartner() {
+        if (handle != 0L) {
+            runCatching { Native.previewClearPartner(handle) }
+        }
+    }
+
+    /** Whether the second loop is the one being heard right now. */
+    fun onSecond(): Boolean {
+        if (handle == 0L) return false
+        return runCatching { JSONObject(Native.previewInfo(handle)).getBoolean("onSecond") }
+            .getOrDefault(false)
+    }
+
     fun seek(frame: Double) {
         if (handle != 0L) {
             runCatching { Native.previewSeek(handle, frame) }

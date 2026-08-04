@@ -95,6 +95,35 @@ public final class Native {
     public static native void previewSetMotion(
             long handle, boolean on, int steps, int depth, int every, int shape);
 
+    /**
+     * Sets the swap schedule between the loop and its partner, or turns it off.
+     *
+     * <p>The loop is divided into {@code steps} equal pieces; {@code holdA}
+     * pieces are read from the first loop and {@code holdB} from the second,
+     * over and over. One play head serves both, so the second loop is heard at
+     * the same place in the bar the first would have been — nothing is
+     * restarted and there are no two clocks to drift apart.
+     *
+     * <p>Lock-free; callable from any thread. Lands on the next piece boundary.
+     */
+    public static native void previewSetPair(
+            long handle, boolean on, int steps, int holdA, int holdB);
+
+    /**
+     * Gives the running preview a second loop.
+     *
+     * <p>Runs the pipeline, so it takes as long as a cut and belongs on a
+     * background thread. Throws if the result is not exactly the same length,
+     * rate and channel count as the loop it joins — the two share one play
+     * head, and a partner of a different length has no shared phase to be read
+     * at. The caller knows both tempi and can ask for one that fits.
+     */
+    public static native void previewSetPartner(
+            long handle, ByteBuffer audio, String name, String paramsJson);
+
+    /** Takes the second loop away. The first keeps playing. */
+    public static native void previewClearPartner(long handle);
+
     /** Moves the play head, in source frames. Wraps. */
     public static native void previewSeek(long handle, double frame);
 

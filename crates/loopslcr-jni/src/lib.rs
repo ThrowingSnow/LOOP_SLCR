@@ -391,6 +391,73 @@ pub extern "system" fn Java_org_loopslcr_Native_previewSetMotion<'a>(
     })
 }
 
+/// `previewSetPair(long handle, boolean on, int steps, int holdA, int holdB)`.
+///
+/// Lock-free; safe from any thread. Lands on the next piece boundary.
+///
+/// # Safety
+/// Called by the JVM with valid arguments; not to be called from Rust.
+#[no_mangle]
+pub extern "system" fn Java_org_loopslcr_Native_previewSetPair<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    handle_value: jlong,
+    on: jboolean,
+    steps: jint,
+    hold_a: jint,
+    hold_b: jint,
+) {
+    guard(&mut env, (), |_| {
+        handle(handle_value)?.set_pair(
+            on != 0,
+            steps.max(0) as u32,
+            hold_a.max(0) as u32,
+            hold_b.max(0) as u32,
+        );
+        Ok(())
+    })
+}
+
+/// `previewSetPartner(long handle, ByteBuffer audio, String name, String params)`.
+///
+/// Runs the pipeline, so it takes as long as a cut and belongs on a background
+/// thread. Throws if the result is not the same shape as the loop it joins.
+///
+/// # Safety
+/// Called by the JVM with valid arguments; not to be called from Rust.
+#[no_mangle]
+pub extern "system" fn Java_org_loopslcr_Native_previewSetPartner<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    handle_value: jlong,
+    audio: JByteBuffer<'a>,
+    name: JString<'a>,
+    params: JString<'a>,
+) {
+    guard(&mut env, (), |env| {
+        let bytes = direct_bytes(env, &audio)?;
+        let name = string_arg(env, &name, "name")?;
+        let params = string_arg(env, &params, "params")?;
+        handle(handle_value)?.set_partner(bytes, &name, &params)
+    })
+}
+
+/// `previewClearPartner(long handle)`. Leaves the first loop playing.
+///
+/// # Safety
+/// Called by the JVM with valid arguments; not to be called from Rust.
+#[no_mangle]
+pub extern "system" fn Java_org_loopslcr_Native_previewClearPartner<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    handle_value: jlong,
+) {
+    guard(&mut env, (), |_| {
+        handle(handle_value)?.clear_partner();
+        Ok(())
+    })
+}
+
 /// `previewSeek(long handle, double frame)`.
 ///
 /// # Safety

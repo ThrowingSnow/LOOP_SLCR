@@ -140,6 +140,46 @@ enum class SpeedMode { Semitones, TargetBpm }
 enum class MotionShape { Rise, Fall, Swing, Scatter, Walk }
 
 /**
+ * The alternation between the two loops. Also only a way of listening.
+ *
+ * Both holds are counted per bar, like everything else that has to stay on the
+ * beat: `1` is a whole bar on that loop, `4` is a beat of it in four-four. There
+ * is no number in here that could put a swap between two beats.
+ *
+ * Kept out of [Settings] for the same reason [MotionSettings] is — it never
+ * reaches the pipeline and must never invalidate a preview.
+ */
+data class PairSettings(
+    val on: Boolean = false,
+    /** The grid the swap lands on, in pieces per bar. */
+    val perBar: Int = 1,
+    /** How many pieces of the first loop, then how many of the second. */
+    val holdA: Int = 1,
+    val holdB: Int = 1,
+) {
+    fun steps(bars: Long?): Int? {
+        if (bars == null || bars <= 0 || perBar <= 0) return null
+        return (bars * perBar).toInt()
+    }
+
+    fun gridName(sig: String): String = MotionSettings.gridName(perBar, sig)
+
+    /**
+     * Whether the alternation divides the loop evenly.
+     *
+     * When it does not, the last cycle before the seam is cut short — the loop
+     * still repeats exactly, because the count restarts with it, but one turn of
+     * the pattern is shorter than the others. That is a musical choice, not a
+     * fault, so it is *said* rather than prevented.
+     */
+    fun fitsTheLoop(bars: Long?): Boolean {
+        val pieces = steps(bars) ?: return true
+        val cycle = holdA + holdB
+        return cycle > 0 && pieces % cycle == 0
+    }
+}
+
+/**
  * The stepped displacement of the play head. A way of *listening* to the loop.
  *
  * **Deliberately not part of [Settings].** Nothing here reaches the pipeline,

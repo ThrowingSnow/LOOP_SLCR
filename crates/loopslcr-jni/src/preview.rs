@@ -35,7 +35,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use loopslcr_core::ops::preview::{Motion, Preview, Shape, DEFAULT_GLIDE_MS};
+use loopslcr_core::ops::preview::{Motion, Pair, Preview, Shape, DEFAULT_GLIDE_MS};
 use loopslcr_core::pipeline;
 use loopslcr_core::wav::Wav;
 
@@ -54,6 +54,13 @@ pub struct Handle {
     /// asked for. One store, one load, and the block either sees the whole new
     /// motion or the whole old one.
     motion: AtomicU64,
+    /// The swap schedule, packed — see [`pack_pair`]. Written by the UI thread.
+    pair: AtomicU64,
+    /// Whether a partner is installed and whether it is the one sounding, as
+    /// 0/1. Written by the audio thread, so a UI can ask without taking the
+    /// mutex the audio thread is holding for the length of a block.
+    partnered: AtomicU64,
+    on_second: AtomicU64,
     /// Where the play head is, as `f64` bits. Written by the audio thread only.
     position: AtomicU64,
     /// Where the audio being heard comes from, as `f64` bits. The same as
@@ -72,6 +79,9 @@ impl Handle {
         Handle {
             target: AtomicU64::new(1.0f64.to_bits()),
             motion: AtomicU64::new(0),
+            pair: AtomicU64::new(0),
+            partnered: AtomicU64::new(0),
+            on_second: AtomicU64::new(0),
             position: AtomicU64::new(0.0f64.to_bits()),
             sounding: AtomicU64::new(0.0f64.to_bits()),
             played: AtomicU64::new(0),
@@ -104,6 +114,66 @@ impl Handle {
         );
     }
 
+    /// Sets or clears the swap schedule. Callable from any thread.
+    pub fn set_pair(&self, on: bool, steps: u32, hold_a: u32, hold_b: u32) {
+        self.pair
+            .store(pack_pair(on, steps, hold_a, hold_b), Ordering::Relaxed);
+    }
+
+    /// Gives the preview a second loop, or takes it away.
+    ///
+    /// **Not lock-free, and not for the audio thread.** It runs the pipeline,
+    /// which takes as long as a cut does. The run happens *outside* the mutex
+    /// and only the swap is inside it, for the same reason `start` builds before
+    /// it installs: a lock held across a pipeline run would stall the audio
+    /// thread for the length of a cut, which is a dropout, not a delay.
+    ///
+    /// The varispeed *is* applied here, unlike [`create`]. The partner has to
+    /// come out at the first loop's own tempo and length, and the handle's live
+    /// ratio then moves both together — one ratio, one clock, nothing to drift.
+    pub fn set_partner(&self, bytes: &[u8], name: &str, params: &str) -> Result<(), String> {
+        let wav = Wav::parse(bytes).map_err(|e| e.to_string())?;
+        let (params, _) = api::params_from_json(params)?;
+        let outcome = pipeline::run(&wav, name, &params).map_err(|e| e.to_string())?;
+        if outcome.buffer.frames() == 0 {
+            return Err("the second loop is empty".to_string());
+        }
+
+        let wanted = self.frames;
+        let got = outcome.buffer.frames();
+        let mut preview = self.inner.lock().map_err(|_| "the preview is gone")?;
+        let outcome_result = preview.set_partner(Some(outcome.buffer));
+        self.partnered
+            .store(u64::from(preview.has_partner()), Ordering::Relaxed);
+        outcome_result.map_err(|why| {
+            // The numbers, not just the complaint. "A different length" leaves
+            // the user with nothing to change; "352 800 against 344 000" tells
+            // them which loop is wrong and by how much.
+            format!("{why} — {got} frames against {wanted}")
+        })
+    }
+
+    pub fn clear_partner(&self) {
+        if let Ok(mut preview) = self.inner.lock() {
+            let _ = preview.set_partner(None);
+            self.partnered.store(0, Ordering::Relaxed);
+            self.on_second.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Whether a partner is installed, as last published by the audio thread.
+    ///
+    /// Read from an atomic rather than from the preview, so a UI polling thirty
+    /// times a second never waits on the lock the audio thread holds.
+    pub fn has_partner(&self) -> bool {
+        self.partnered.load(Ordering::Relaxed) != 0
+    }
+
+    /// Whether the second loop is the one being heard.
+    pub fn on_second(&self) -> bool {
+        self.on_second.load(Ordering::Relaxed) != 0
+    }
+
     pub fn channels(&self) -> usize {
         self.channels
     }
@@ -134,12 +204,17 @@ impl Handle {
         };
         preview.set_target_ratio(f64::from_bits(self.target.load(Ordering::Relaxed)));
         preview.set_motion(unpack_motion(self.motion.load(Ordering::Relaxed)));
+        preview.set_pair(unpack_pair(self.pair.load(Ordering::Relaxed)));
         let frames = preview.read(out);
         self.position
             .store(preview.position().to_bits(), Ordering::Relaxed);
         self.sounding
             .store(preview.sounding_position().to_bits(), Ordering::Relaxed);
         self.played.store(preview.played(), Ordering::Relaxed);
+        self.partnered
+            .store(u64::from(preview.has_partner()), Ordering::Relaxed);
+        self.on_second
+            .store(u64::from(preview.on_second()), Ordering::Relaxed);
         frames
     }
 
@@ -161,7 +236,9 @@ impl Handle {
             .integer("frames", self.frames as i64)
             .number("position", self.position())
             .number("sounding", self.sounding())
-            .integer("played", self.played() as i64);
+            .integer("played", self.played() as i64)
+            .bool("hasPartner", self.has_partner())
+            .bool("onSecond", self.on_second());
         out.render()
     }
 }
@@ -210,6 +287,30 @@ fn unpack_motion(bits: u64) -> Option<Motion> {
             4 => Shape::Walk,
             _ => Shape::Rise,
         },
+    })
+}
+
+/// Packs a swap schedule into one word, for the same reason a motion is packed:
+/// three fields set one at a time could be read half-changed, and half of a
+/// swap schedule is an alternation nobody asked for.
+fn pack_pair(on: bool, steps: u32, hold_a: u32, hold_b: u32) -> u64 {
+    if !on || steps == 0 || hold_b == 0 {
+        return 0;
+    }
+    let steps = steps.min(4096);
+    let hold_a = hold_a.min(steps);
+    let hold_b = hold_b.min(steps);
+    1 << 63 | u64::from(steps) | u64::from(hold_a) << 16 | u64::from(hold_b) << 32
+}
+
+fn unpack_pair(bits: u64) -> Option<Pair> {
+    if bits & 1 << 63 == 0 {
+        return None;
+    }
+    Some(Pair {
+        steps: (bits & 0xFFFF) as u32,
+        hold_a: (bits >> 16 & 0xFFFF) as u32,
+        hold_b: (bits >> 32 & 0xFFFF) as u32,
     })
 }
 

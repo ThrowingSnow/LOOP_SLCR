@@ -51,12 +51,21 @@ class MainActivity : ComponentActivity() {
      * anything the user did not hand it.
      */
     private val openFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri ?: return@registerForActivityResult
+        take(uri) { name, buffer -> model.open(name, buffer) }
+    }
+
+    /** The same picker for the second loop. One grant, one file, same rules. */
+    private val openSecondFile =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            take(uri) { name, buffer -> model.openSecond(name, buffer) }
+        }
+
+    private fun take(uri: Uri?, hand: (String, ByteBuffer) -> Unit) {
+        uri ?: return
         val name = displayName(uri)
-        val loaded = runCatching { read(uri) }
-        loaded.fold(
+        runCatching { read(uri) }.fold(
             onSuccess = { buffer ->
-                if (buffer == null) model.fail("could not read $name") else model.open(name, buffer)
+                if (buffer == null) model.fail("could not read $name") else hand(name, buffer)
             },
             onFailure = { model.fail(explain(it, "could not read $name")) },
         )
@@ -161,6 +170,11 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val motion by model.motion.collectAsState()
+                val pair by model.pair.collectAsState()
+                val second by model.second.collectAsState()
+                val secondSettings by model.secondSettings.collectAsState()
+                val secondPlan by model.secondPlan.collectAsState()
+                val secondProblem by model.secondProblem.collectAsState()
                 val calculator by model.calculator.collectAsState()
                 val sums by model.sums.collectAsState()
                 val calculatorProblem by model.calculatorProblem.collectAsState()
@@ -181,16 +195,22 @@ class MainActivity : ComponentActivity() {
                         contentColor = Palette.wave,
                     ) {
                         Tab(tab == 0, onClick = { tab = 0 }) {
-                            Text("CUTTER", Modifier.padding(12.dp), fontSize = 12.sp)
+                            Text("CUTTER 1", Modifier.padding(10.dp), fontSize = 12.sp)
                         }
+                        // Numbered rather than named, because the two are not
+                        // peers: the second loop is cut to fit the first, and
+                        // "CUTTER 2" says which one is which.
                         Tab(tab == 1, onClick = { tab = 1 }) {
-                            Text("CALCULATOR", Modifier.padding(12.dp), fontSize = 12.sp)
+                            Text("CUTTER 2", Modifier.padding(10.dp), fontSize = 12.sp)
                         }
-                        // A gear rather than a word: it is a third destination
-                        // but not a third of the app, and equal billing would
-                        // say otherwise.
                         Tab(tab == 2, onClick = { tab = 2 }) {
-                            Text("\u2699", Modifier.padding(12.dp), fontSize = 16.sp)
+                            Text("CALC", Modifier.padding(10.dp), fontSize = 12.sp)
+                        }
+                        // A gear rather than a word: it is another destination
+                        // but not another quarter of the app, and equal billing
+                        // would say otherwise.
+                        Tab(tab == 3, onClick = { tab = 3 }) {
+                            Text("\u2699", Modifier.padding(10.dp), fontSize = 16.sp)
                         }
                     }
 
@@ -205,6 +225,9 @@ class MainActivity : ComponentActivity() {
                             playHead = head,
                             motion = motion,
                             onMotion = { change -> model.setMotion(change) },
+                            pair = pair,
+                            hasSecond = second != null,
+                            onPair = { change -> model.setPair(change) },
                             onPlay = { model.togglePlay() },
                             onDragMarker = { marker, at -> model.dragMarker(marker, at) },
                             onOpen = {
@@ -224,7 +247,19 @@ class MainActivity : ComponentActivity() {
                             onDismissProblem = { model.dismissProblem() },
                         )
 
-                        2 -> SettingsScreen(
+                        1 -> SecondScreen(
+                            first = loaded,
+                            firstPlan = plan,
+                            loaded = second,
+                            settings = secondSettings,
+                            plan = secondPlan,
+                            problem = secondProblem,
+                            onOpen = { openSecondFile.launch(arrayOf("*/*")) },
+                            onDrop = { model.dropSecond() },
+                            onChange = { change -> model.updateSecond(change) },
+                        )
+
+                        3 -> SettingsScreen(
                             engineVersion = Engine.version,
                             build = BuildConfig.VERSION_NAME,
                         )

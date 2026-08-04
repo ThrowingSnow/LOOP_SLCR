@@ -74,6 +74,9 @@ fun CutterScreen(
     onDismissProblem: () -> Unit,
     motion: MotionSettings = MotionSettings(),
     onMotion: ((MotionSettings) -> MotionSettings) -> Unit = {},
+    pair: PairSettings = PairSettings(),
+    hasSecond: Boolean = false,
+    onPair: ((PairSettings) -> PairSettings) -> Unit = {},
 ) {
     // One lane or two, and it is a *view*, not a setting: nothing about the file
     // or the cut changes. Folded, the picture is half as tall, and on a phone
@@ -178,6 +181,18 @@ fun CutterScreen(
                 },
             ) {
                 MotionControls(motion, settings, plan, onMotion)
+            }
+
+            Section(
+                "Swap",
+                summary = when {
+                    !hasSecond -> "no second loop"
+                    pair.on -> "${pair.holdA} on 1 · ${pair.holdB} on 2 · " +
+                        "per ${pair.gridName(settings.sig)}"
+                    else -> "off"
+                },
+            ) {
+                PairControls(pair, settings, plan, hasSecond, onPair)
             }
 
             Section(
@@ -334,7 +349,7 @@ private fun Problem(message: String, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun Panel(content: @Composable () -> Unit) {
+internal fun Panel(content: @Composable () -> Unit) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Palette.surface),
         border = BorderStroke(1.dp, Palette.outlineIdle),
@@ -367,7 +382,7 @@ private fun SectionTitle(text: String) {
  * [summary] shows on the collapsed header, so folding hides detail, never state.
  */
 @Composable
-private fun Section(
+internal fun Section(
     title: String,
     initiallyOpen: Boolean = false,
     summary: String? = null,
@@ -634,7 +649,7 @@ private fun PlanCard(p: Plan, s: Settings, onChange: ((Settings) -> Settings) ->
 }
 
 @Composable
-private fun Fact(label: String, value: String, colour: Color = Palette.text) {
+internal fun Fact(label: String, value: String, colour: Color = Palette.text) {
     Row {
         Text(
             label,
@@ -658,7 +673,7 @@ private fun BarsRow(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
 }
 
 @Composable
-private fun SkipRow(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
+internal fun SkipRow(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text("skip", color = Palette.dim, fontSize = 12.sp, modifier = Modifier.width(88.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -679,7 +694,7 @@ private fun SkipRow(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
  * at all.
  */
 @Composable
-private fun SourceControls(
+internal fun SourceControls(
     a: Analysis,
     s: Settings,
     onChange: ((Settings) -> Settings) -> Unit,
@@ -756,7 +771,7 @@ private fun AlignRow(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
  * visible, explicable and refusable. See [Paths].
  */
 @Composable
-private fun WorkflowRow(s: Settings, plan: Plan?, onChange: ((Settings) -> Settings) -> Unit) {
+internal fun WorkflowRow(s: Settings, plan: Plan?, onChange: ((Settings) -> Settings) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         for (w in Paths.offered) {
             Chip(Paths.label(w), s.workflow == w) { onChange { it.copy(workflow = w) } }
@@ -1077,6 +1092,104 @@ private fun MotionControls(
 }
 
 /**
+ * The alternation between the two loops.
+ *
+ * # What it does
+ *
+ * Holds the first loop for so many pieces of the grid, then the second for so
+ * many, over and over. One play head serves both, so the second loop is heard at
+ * the same place in the bar the first would have been — nothing is retriggered,
+ * and there are no two clocks that could drift.
+ *
+ * # Where it can go wrong, and what is said about it
+ *
+ * The pair needs both loops to be exactly the same length. That is achievable
+ * exactly, because both tempi are known: the second loop is cut to the first
+ * one's bar count and pulled to its tempo with the same rational arithmetic as
+ * any other cut. When it is *not* achievable — no tempo declared, a different
+ * sample rate — the engine refuses rather than stretching, and the reason turns
+ * up in CUTTER 2 with both numbers in it.
+ *
+ * A cycle that does not divide the loop is a different matter: the last turn
+ * before the seam comes out short. That is a musical choice rather than a fault,
+ * so it is said and not prevented.
+ */
+@Composable
+private fun PairControls(
+    p: PairSettings,
+    s: Settings,
+    plan: Plan?,
+    hasSecond: Boolean,
+    onPair: ((PairSettings) -> PairSettings) -> Unit,
+) {
+    if (!hasSecond) {
+        Text(
+            "Open a second loop under CUTTER 2. It is cut to this loop's bar " +
+                "count and pulled to its tempo, so the two can share one play " +
+                "head — which is what keeps them in time without either being " +
+                "restarted.",
+            color = Palette.dim,
+            fontSize = 11.sp,
+        )
+        return
+    }
+
+    Toggle("Alternate between the two loops", p.on) { on -> onPair { it.copy(on = on) } }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("per", color = Palette.dim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+        Spacer(Modifier.width(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            MotionSettings.divisions.forEach { per ->
+                Chip(MotionSettings.gridName(per, s.sig), p.perBar == per) {
+                    onPair { it.copy(perBar = per) }
+                }
+            }
+        }
+    }
+
+    Text(
+        "hold   ${p.holdA} on loop 1, then ${p.holdB} on loop 2",
+        color = Palette.dim,
+        fontSize = 11.sp,
+        fontFamily = FontFamily.Monospace,
+    )
+    ThinSlider(
+        value = p.holdA.toFloat().coerceIn(1f, 16f),
+        onValueChange = { raw -> onPair { it.copy(holdA = raw.roundToInt()) } },
+        valueRange = 1f..16f,
+        modifier = Modifier.fillMaxWidth().testTag("holdA"),
+    )
+    ThinSlider(
+        value = p.holdB.toFloat().coerceIn(0f, 16f),
+        onValueChange = { raw -> onPair { it.copy(holdB = raw.roundToInt()) } },
+        valueRange = 0f..16f,
+        modifier = Modifier.fillMaxWidth().testTag("holdB"),
+    )
+
+    if (p.holdB == 0) {
+        Text(
+            "nothing on loop 2 — it never comes in",
+            color = Palette.dim,
+            fontSize = 11.sp,
+        )
+    }
+
+    if (!p.fitsTheLoop(plan?.bars)) {
+        // Said, not prevented. The loop still repeats exactly — the count
+        // restarts with it — but one turn of the alternation is shorter than
+        // the others, and that is worth knowing before it is blamed on a bug.
+        Text(
+            "${p.holdA + p.holdB} does not divide " +
+                "${p.steps(plan?.bars) ?: "the loop"} — the last turn before " +
+                "the seam comes out short. Still a loop; just an uneven one.",
+            color = Palette.warn,
+            fontSize = 11.sp,
+        )
+    }
+}
+
+/**
  * The typed tempo: one row, a quarter wide, beside the speed it sets.
  *
  * Hand-rolled rather than [OutlinedTextField], which has a fixed 56 dp minimum
@@ -1146,7 +1259,7 @@ private fun TempoField(
 
 
 @Composable
-private fun TapeControls(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
+internal fun TapeControls(s: Settings, onChange: ((Settings) -> Settings) -> Unit) {
     Toggle("Tape character", s.tape) { on -> onChange { it.copy(tape = on) } }
     if (s.tape) {
         Fact("wow", "%.2f %%".format(s.wow))

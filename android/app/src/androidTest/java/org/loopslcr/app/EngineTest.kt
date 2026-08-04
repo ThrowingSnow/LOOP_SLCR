@@ -202,6 +202,88 @@ class EngineTest {
         }
     }
 
+    @Test
+    fun a_second_loop_alternates_with_the_first_and_shares_its_clock() {
+        // The pair, end to end on the device. Two files of the same length at
+        // different tempi in their names, so the second is pulled to the first
+        // by the same exact arithmetic as any other cut — which is what makes
+        // the shared play head possible at all.
+        val handle = org.loopslcr.Native.previewCreate(wav, name, "{}")
+        try {
+            val frames = org.json.JSONObject(org.loopslcr.Native.previewInfo(handle))
+                .getLong("frames").toInt()
+
+            val alone = readWholeLoop(handle, frames)
+
+            // The same eight bars, pulled to the same tempo: the same length,
+            // exactly, or the bridge refuses it.
+            org.loopslcr.Native.previewSetPartner(
+                handle,
+                org.loopslcr.Native.direct(wav(bars = 8, tone = 0.11)),
+                "200 other.wav",
+                Settings(bars = 8L, speedMode = SpeedMode.TargetBpm, targetBpm = 200.0).toJson(),
+            )
+            assertTrue(
+                "the partner did not take",
+                org.json.JSONObject(org.loopslcr.Native.previewInfo(handle))
+                    .getBoolean("hasPartner"),
+            )
+
+            // Two pieces on each side of a four-piece grid: the second half of
+            // the loop comes from the other file.
+            org.loopslcr.Native.previewSetPair(handle, true, 4, 2, 2)
+            val paired = readWholeLoop(handle, frames)
+
+            var different = 0
+            for (i in alone.indices) {
+                if (kotlin.math.abs(alone[i] - paired[i]) > 1e-4f) different++
+            }
+            assertTrue("the second loop was never heard", different > 0)
+
+            // And the clock is still one clock: a whole pass leaves the head
+            // exactly where it started, swaps or no swaps.
+            val position = org.json.JSONObject(org.loopslcr.Native.previewInfo(handle))
+                .getDouble("position")
+            assertTrue("a pass ended at $position", kotlin.math.abs(position) < 1e-6)
+
+            org.loopslcr.Native.previewClearPartner(handle)
+            readWholeLoop(handle, frames)
+            assertFalse(
+                "the partner survived being cleared",
+                org.json.JSONObject(org.loopslcr.Native.previewInfo(handle))
+                    .getBoolean("hasPartner"),
+            )
+        } finally {
+            org.loopslcr.Native.previewDestroy(handle)
+        }
+    }
+
+    @Test
+    fun a_second_loop_of_the_wrong_length_is_refused_with_both_numbers() {
+        // Refused rather than stretched: stretching here would undo the
+        // exactness the whole tool is built on. And the message has to carry
+        // the numbers, or the user is told something is wrong with no way to
+        // find out what.
+        val handle = org.loopslcr.Native.previewCreate(wav, name, "{}")
+        try {
+            val e = runCatching {
+                org.loopslcr.Native.previewSetPartner(
+                    handle,
+                    org.loopslcr.Native.direct(wav(bars = 8)),
+                    "200 other.wav",
+                    Settings(bars = 4L).toJson(),
+                )
+            }.exceptionOrNull()
+
+            assertTrue("a half-length partner was accepted", e is IllegalStateException)
+            val message = e!!.message ?: ""
+            assertTrue("no length in \"$message\"", message.contains("length"))
+            assertTrue("no frame counts in \"$message\"", message.contains("frames against"))
+        } finally {
+            org.loopslcr.Native.previewDestroy(handle)
+        }
+    }
+
     /** One loop's worth of interleaved output, in one array. */
     private fun readWholeLoop(handle: Long, frames: Int): FloatArray {
         val chunk = 1024
@@ -386,7 +468,7 @@ class EngineTest {
          * asset so the fixture is readable: a binary in the tree would hide what
          * the test is actually feeding in.
          */
-        fun wav(bars: Int): ByteArray {
+        fun wav(bars: Int, tone: Double = 0.05): ByteArray {
             val frames = (bars * BAR).toInt()
             val dataBytes = frames * 2 * 2
             val out = ByteBuffer.allocate(44 + dataBytes).order(ByteOrder.LITTLE_ENDIAN)
@@ -396,7 +478,7 @@ class EngineTest {
             out.putInt(RATE).putInt(RATE * 4).putShort(4).putShort(16)
             out.put("data".toByteArray()).putInt(dataBytes)
             for (i in 0 until frames) {
-                val v = (0.25 * sin(i * 0.05) * Short.MAX_VALUE).toInt().toShort()
+                val v = (0.25 * sin(i * tone) * Short.MAX_VALUE).toInt().toShort()
                 out.putShort(v).putShort(v)
             }
             return out.array()
